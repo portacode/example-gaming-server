@@ -1,0 +1,35 @@
+{
+  "name": "colyseus-gaming-template",
+  "version": "1.0.0",
+  "description": "A flexible Colyseus server template for CS students to build multiplayer games",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest"
+  },
+  "keywords": [
+    "colyseus",
+    "multiplayer",
+    "game server",
+    "template"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "colyseus": "^0.15.14",
+    "express": "^4.18.2",
+    "@colyseus/schema": "^1.2.2",
+    "reflect-metadata": "^0.1.13"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.17",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.0.0"
+  }
+}
