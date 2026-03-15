@@ -26,29 +26,34 @@
     let client;
     let room;
 
+    // Build a WebSocket URL that matches the page's origin.
+    function buildWsUrl() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${location.host}`;
+    }
+
     document.getElementById('connectBtn').addEventListener('click', async () => {
       try {
-        // Connect to the server (adjust URL if needed)
-        client = new Colyseus.Client('ws://127.0.0.1:5000');
-        // For external tunnel, use: 'wss://1_888.exposify.net'
-        // But note: wss requires secure websocket; our server is not behind TLS unless using nginx.
-        // For simplicity, we assume local testing.
+        const wsUrl = buildWsUrl();
+        logMsg(`Connecting to ${wsUrl} …`);
+        client = new Colyseus.Client(wsUrl);
         room = await client.joinOrCreate('abstract_room');
-        logMsg('Joined room: ' + room.roomId);
+        logMsg(`Joined room: ${room.roomId}`);
 
-        room.onStateChange((state) => {
+        room.onStateChange(state => {
+          // Uncomment if you want to see state updates
           // logMsg('State change: ' + JSON.stringify(state));
         });
 
-        room.onMessage('join', (data) => {
+        room.onMessage('join', data => {
           logMsg('Player joined: ' + JSON.stringify(data));
         });
 
-        room.onMessage('leave', (data) => {
+        room.onMessage('leave', data => {
           logMsg('Player left: ' + JSON.stringify(data));
         });
 
-        room.onMessage('message', (data) => {
+        room.onMessage('message', data => {
           logMsg('Received message: ' + JSON.stringify(data));
         });
 
