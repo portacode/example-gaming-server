@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Colyseus Test Client</title>
+  <script src="https://cdn.jsdelivr.net/npm/colyseus.js@0.15.14/dist/colyseus.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; }
+    #log { white-space: pre-line; background: #f4f4f4; padding: 1em; margin-top: 1em; height: 200px; overflow: auto; }
+    button { margin: 0.5em; padding: 0.5em 1em; }
+  </style>
+</head>
+<body>
+  <h1>Colyseus Test Client</h1>
+  <button id="connectBtn">Connect & Join Room</button>
+  <button id="sendBtn" disabled>Send Message</button>
+  <div id="log"></div>
+
+  <script>
+    const log = document.getElementById('log');
+    function logMsg(msg) {
+      log.textContent += msg + '\n';
+      log.scrollTop = log.scrollHeight;
+    }
+
+    let client;
+    let room;
+
+    document.getElementById('connectBtn').addEventListener('click', async () => {
+      try {
+        // Connect to the server (adjust URL if needed)
+        client = new Colyseus.Client('ws://127.0.0.1:5000');
+        // For external tunnel, use: 'wss://1_888.exposify.net'
+        // But note: wss requires secure websocket; our server is not behind TLS unless using nginx.
+        // For simplicity, we assume local testing.
+        room = await client.joinOrCreate('abstract_room');
+        logMsg('Joined room: ' + room.roomId);
+
+        room.onStateChange((state) => {
+          // logMsg('State change: ' + JSON.stringify(state));
+        });
+
+        room.onMessage('join', (data) => {
+          logMsg('Player joined: ' + JSON.stringify(data));
+        });
+
+        room.onMessage('leave', (data) => {
+          logMsg('Player left: ' + JSON.stringify(data));
+        });
+
+        room.onMessage('message', (data) => {
+          logMsg('Received message: ' + JSON.stringify(data));
+        });
+
+        document.getElementById('connectBtn').disabled = true;
+        document.getElementById('sendBtn').disabled = false;
+      } catch (e) {
+        logMsg('Error: ' + e);
+      }
+    });
+
+    document.getElementById('sendBtn').addEventListener('click', () => {
+      if (room) {
+        const msg = { hello: 'world', timestamp: Date.now() };
+        room.send(msg);
+        logMsg('Sent message: ' + JSON.stringify(msg));
+      }
+    });
+  </script>
+</body>
+</html>
