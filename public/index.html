@@ -37,7 +37,7 @@
         const wsUrl = buildWsUrl();
         logMsg(`Connecting to ${wsUrl} …`);
         client = new Colyseus.Client(wsUrl);
-        room = await client.joinOrCreate('abstract_room');
+        room = await client.joinOrCreate('game_room');
         logMsg(`Joined room: ${room.roomId}`);
 
         room.onStateChange(state => {
@@ -45,16 +45,20 @@
           // logMsg('State change: ' + JSON.stringify(state));
         });
 
-        room.onMessage('join', data => {
-          logMsg('Player joined: ' + JSON.stringify(data));
+        room.onMessage('waitingUpdate', data => {
+          logMsg(`Waiting: ${data.waiting}/${data.max} ${data.started ? '(started)' : '(waiting)'}`);
         });
 
-        room.onMessage('leave', data => {
-          logMsg('Player left: ' + JSON.stringify(data));
+        room.onMessage('gameStart', data => {
+          logMsg(`Game started: ${data.message}`);
         });
 
-        room.onMessage('message', data => {
-          logMsg('Received message: ' + JSON.stringify(data));
+        room.onMessage('playerMessage', data => {
+          logMsg(`Player message from ${data.sessionId}: ${JSON.stringify(data.message)}`);
+        });
+
+        room.onMessage('error', data => {
+          logMsg(`Error: ${data.message}`);
         });
 
         document.getElementById('connectBtn').disabled = true;
