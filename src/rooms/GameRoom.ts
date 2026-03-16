@@ -24,15 +24,13 @@ export class GameRoom extends Room<GameState> {
     this.state.started = false;
     console.log(`Room ${this.roomId} created (max ${this.maxClients} players)`);
 
-    // Handle any incoming message and broadcast as playerMessage
-    this.onMessage("*", (client, type, message) => {
-      // Only broadcast if game started
+    // Handle any incoming message and broadcast as playerMessage (only if game started)
+    this.onMessage("*", (client, message) => {
       if (this.state.started) {
         this.broadcast("playerMessage", {
           sessionId: client.sessionId,
-          type,
           message,
-        } as any);
+        });
       }
     });
   }
@@ -50,13 +48,13 @@ export class GameRoom extends Room<GameState> {
     player.username = username;
     this.state.players.set(client.sessionId, player);
     this.broadcast("waitingUpdate", {
-      waiting: Object.keys(this.state.players).length,
+      waiting: this.state.players.size,
       max: this.maxClients,
       started: this.state.started,
-    } as any);
+    });
 
     // If enough players, start the game
-    if (Object.keys(this.state.players).length >= this.maxClients) {
+    if (this.state.players.size >= this.maxClients) {
       this.state.started = true;
       this.broadcast("gameStart", {
         message: "Enough players! Game started.",
@@ -65,8 +63,8 @@ export class GameRoom extends Room<GameState> {
           id: p.id,
           username: p.username,
         })),
-      } as any);
-      console.log(`Room ${this.roomId} started with ${Object.keys(this.state.players).length} players`);
+      });
+      console.log(`Room ${this.roomId} started with ${this.state.players.size} players`);
     }
   }
 
@@ -78,7 +76,7 @@ export class GameRoom extends Room<GameState> {
         this.broadcast("playerLeft", {
           sessionId: client.sessionId,
           username: player.username,
-        } as any);
+        });
         // Remove player from map
         this.state.players.delete(client.sessionId);
         // Optionally broadcast updated player list
@@ -88,15 +86,15 @@ export class GameRoom extends Room<GameState> {
             id: p.id,
             username: p.username,
           })),
-        } as any);
+        });
       } else {
         // Still waiting for players to start
         this.state.players.delete(client.sessionId);
         this.broadcast("waitingUpdate", {
-          waiting: Object.keys(this.state.players).length,
+          waiting: this.state.players.size,
           max: this.maxClients,
           started: this.state.started,
-        } as any);
+        });
       }
     }
   }
