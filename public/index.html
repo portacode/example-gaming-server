@@ -6,45 +6,39 @@
   <title>Colyseus Babylon Template</title>
   <style>
     :root {
-      --panel: rgba(247, 242, 231, 0.94);
-      --panel-border: rgba(56, 69, 79, 0.16);
+      --panel: rgba(252, 248, 241, 0.96);
+      --panel-border: rgba(43, 58, 66, 0.14);
       --ink: #20313b;
-      --accent: #d56b2d;
-      --accent-strong: #ac4f18;
+      --muted: #5b6b74;
+      --accent: #c95d2a;
+      --accent-strong: #a5481c;
       --canvas-bg: linear-gradient(180deg, #dff0ff 0%, #eef7ff 45%, #f8faf2 100%);
+      --scrim: rgba(22, 29, 34, 0.28);
     }
 
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; font-family: Georgia, "Times New Roman", serif; color: var(--ink); }
-    body { display: grid; grid-template-columns: 340px 1fr; background: #d7decd; }
-    aside {
-      padding: 24px 20px;
-      background:
-        radial-gradient(circle at top left, rgba(255,255,255,0.6), transparent 38%),
-        linear-gradient(180deg, #ece6d8 0%, #ddd2bc 100%);
-      border-right: 1px solid rgba(43, 55, 62, 0.1);
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-    }
-    h1 { margin: 0; font-size: 2rem; line-height: 1.05; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; font-family: Georgia, "Times New Roman", serif; color: var(--ink); overscroll-behavior: none; }
+    body { position: relative; background: #d7decd; }
+    h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 2.6rem); line-height: 1.02; }
     p { margin: 0; line-height: 1.45; }
+    button, input { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
     .card {
       padding: 16px;
       border: 1px solid var(--panel-border);
       background: var(--panel);
-      border-radius: 14px;
-      box-shadow: 0 12px 32px rgba(42, 45, 35, 0.08);
+      border-radius: 18px;
+      box-shadow: 0 20px 48px rgba(29, 37, 33, 0.08);
     }
-    .stack { display: flex; flex-direction: column; gap: 10px; }
-    label { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #5a645b; }
+    .stack { display: flex; flex-direction: column; gap: 12px; }
+    label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
     input, button {
       width: 100%;
-      border-radius: 10px;
+      border-radius: 14px;
       border: 1px solid rgba(34, 46, 53, 0.12);
-      padding: 12px 14px;
+      padding: 13px 15px;
       font: inherit;
     }
+    input { background: rgba(255, 255, 255, 0.82); }
     button {
       background: var(--accent);
       color: #fff8ef;
@@ -63,8 +57,9 @@
       gap: 8px;
     }
     main {
-      min-width: 0;
       position: relative;
+      width: 100vw;
+      height: 100vh;
       background: var(--canvas-bg);
     }
     #renderCanvas {
@@ -76,57 +71,193 @@
     }
     .overlay {
       position: absolute;
-      left: 24px;
-      top: 24px;
-      padding: 14px 16px;
-      border-radius: 14px;
-      background: rgba(250, 246, 239, 0.86);
-      backdrop-filter: blur(8px);
+      left: 16px;
+      top: 16px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(250, 246, 239, 0.9);
+      backdrop-filter: blur(10px);
       border: 1px solid rgba(56, 69, 79, 0.12);
-      max-width: min(480px, calc(100% - 48px));
+      max-width: min(420px, calc(100% - 32px));
       box-shadow: 0 16px 40px rgba(20, 30, 36, 0.12);
+      pointer-events: none;
+      z-index: 2;
     }
-    .overlay strong { display: block; margin-bottom: 4px; }
-    @media (max-width: 900px) {
-      body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-      aside { border-right: 0; border-bottom: 1px solid rgba(43, 55, 62, 0.1); }
-      main { min-height: 60vh; }
+    .overlay strong { display: block; margin-bottom: 2px; font-size: 0.95rem; }
+    .overlay div { font-size: 0.92rem; color: var(--muted); }
+    .cornerButton {
+      position: absolute;
+      top: 16px;
+      z-index: 3;
+      width: auto;
+      min-width: 0;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(43, 58, 66, 0.12);
+      background: rgba(250, 246, 239, 0.92);
+      color: var(--ink);
+      box-shadow: 0 12px 32px rgba(20, 30, 36, 0.16);
+    }
+    #logoutBtn {
+      right: 16px;
+      width: 48px;
+      padding: 10px 0;
+      font-size: 1.05rem;
+    }
+    #debugToggle {
+      right: 72px;
+      font-size: 0.88rem;
+      background: rgba(250, 246, 239, 0.92);
+    }
+    #loginModal {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: var(--scrim);
+      backdrop-filter: blur(8px);
+    }
+    #loginModal[data-visible="true"] {
+      display: flex;
+    }
+    .modalCard {
+      width: min(460px, 100%);
+      padding: 24px;
+      border-radius: 24px;
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.72), transparent 36%),
+        linear-gradient(180deg, rgba(246, 239, 226, 0.98) 0%, rgba(231, 220, 199, 0.98) 100%);
+      border: 1px solid rgba(43, 58, 66, 0.12);
+      box-shadow: 0 24px 60px rgba(20, 30, 36, 0.24);
+    }
+    .eyebrow {
+      font-size: 0.78rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .heroCopy {
+      color: var(--muted);
+      font-size: 1rem;
+    }
+    .buttonRow {
+      display: flex;
+      gap: 10px;
+    }
+    .buttonRow button {
+      flex: 1;
+    }
+    #debugPanel {
+      position: absolute;
+      left: 16px;
+      right: 16px;
+      bottom: 16px;
+      z-index: 3;
+      display: none;
+      max-height: min(42vh, 320px);
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(43, 58, 66, 0.12);
+      background: rgba(247, 242, 231, 0.95);
+      box-shadow: 0 20px 48px rgba(20, 30, 36, 0.22);
+      backdrop-filter: blur(12px);
+    }
+    #debugPanel[data-open="true"] {
+      display: flex;
+      flex-direction: column;
+    }
+    .debugHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(43, 58, 66, 0.08);
+      background: rgba(255, 255, 255, 0.22);
+    }
+    .debugHeader strong {
+      font-size: 0.92rem;
+    }
+    .debugHint {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .debugBody {
+      padding: 12px 14px 14px;
+    }
+    #log {
+      min-height: 120px;
+      max-height: calc(min(42vh, 320px) - 72px);
+    }
+    @media (max-width: 700px) {
+      .overlay {
+        right: 16px;
+        max-width: calc(100% - 32px);
+      }
+      #debugToggle {
+        right: 68px;
+      }
+      .modalCard {
+        padding: 20px;
+        border-radius: 22px;
+      }
+      .buttonRow {
+        flex-direction: column;
+      }
+      #debugPanel {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+      }
     }
   </style>
 </head>
 <body>
-  <aside>
-    <div class="stack">
-      <h1>Babylon + Colyseus</h1>
-      <p>Browser-native 3D client scaffold with room sync, player projections, reconnects, and a small Havok physics sandbox.</p>
-    </div>
-
-    <section class="card stack">
-      <div class="stack">
-        <label for="usernameInput">Player Name</label>
-        <input type="text" id="usernameInput" placeholder="Enter username">
-      </div>
-      <button id="connectBtn">Connect & Join Room</button>
-      <button id="pingBtn" disabled>Send Ping</button>
-    </section>
-
-    <section class="card stack">
-      <strong>Controls</strong>
-      <p>Use <code>WASD</code> or the arrow keys to move. The current sample view only reveals players within a local radius.</p>
-    </section>
-
-    <section class="card stack">
-      <strong>Log</strong>
-      <div id="log"></div>
-    </section>
-  </aside>
-
   <main>
     <canvas id="renderCanvas"></canvas>
     <div class="overlay">
       <strong id="roomStatus">Disconnected</strong>
       <div id="playerStatus">No player view</div>
     </div>
+    <button id="debugToggle" class="cornerButton" type="button" aria-expanded="false" aria-controls="debugPanel" hidden>Debug</button>
+    <button id="logoutBtn" class="cornerButton" type="button" aria-label="Log out" hidden>&times;</button>
+
+    <section id="loginModal" data-visible="true" aria-label="Login">
+      <div class="modalCard stack">
+        <div class="stack">
+          <div class="eyebrow">Browser Multiplayer Template</div>
+          <h1>Enter The World</h1>
+          <p class="heroCopy">Connect to a Colyseus room, render the scene in Babylon.js, and keep the debug tools tucked away until you need them.</p>
+        </div>
+
+        <section class="card stack">
+          <label for="usernameInput">Player Name</label>
+          <input type="text" id="usernameInput" placeholder="Enter username">
+          <div class="buttonRow">
+            <button id="connectBtn">Join Game</button>
+            <button id="pingBtn" disabled>Send Ping</button>
+          </div>
+        </section>
+
+        <section class="card stack">
+          <strong>Controls</strong>
+          <p>Move with <code>WASD</code> or the arrow keys. Other players are only shown when they are close enough to your character.</p>
+        </section>
+      </div>
+    </section>
+
+    <section id="debugPanel" data-open="false" aria-label="Debug overlay">
+      <div class="debugHeader">
+        <strong>Debug Console</strong>
+        <div class="debugHint">Logs and diagnostics stay hidden unless you open them.</div>
+      </div>
+      <div class="debugBody">
+        <div id="log"></div>
+      </div>
+    </section>
   </main>
 
   <script src="https://cdn.babylonjs.com/babylon.js"></script>

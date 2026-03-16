@@ -26,6 +26,16 @@ export class GameNetworkClient {
     this.room.send("action", action);
   }
 
+  leave() {
+    if (!this.room) {
+      return;
+    }
+
+    const room = this.room;
+    this.room = null;
+    room.leave();
+  }
+
   buildEndpoint() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     return `${protocol}//${location.host}`;
@@ -53,6 +63,10 @@ export class GameNetworkClient {
       this.onConnectionChange(false);
       const shouldReconnect = code !== 1000 && code !== 4001;
       const token = nextRoom.reconnectionToken;
+
+      if (this.room === nextRoom) {
+        this.room = null;
+      }
 
       if (!shouldReconnect || !token || this.reconnectAttempts >= 3) {
         return;

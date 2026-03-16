@@ -8,6 +8,10 @@ const roomStatus = document.getElementById("roomStatus");
 const playerStatus = document.getElementById("playerStatus");
 const logPanel = document.getElementById("log");
 const canvas = document.getElementById("renderCanvas");
+const loginModal = document.getElementById("loginModal");
+const debugPanel = document.getElementById("debugPanel");
+const debugToggle = document.getElementById("debugToggle");
+const logoutButton = document.getElementById("logoutBtn");
 
 function log(message) {
   const line = document.createElement("div");
@@ -18,6 +22,19 @@ function log(message) {
 function setConnected(connected) {
   connectButton.disabled = connected;
   pingButton.disabled = !connected;
+  loginModal.dataset.visible = String(!connected);
+  logoutButton.hidden = !connected;
+  debugToggle.hidden = !connected;
+
+  if (!connected) {
+    setDebugOpen(false);
+  }
+}
+
+function setDebugOpen(open) {
+  debugPanel.dataset.open = String(open);
+  debugToggle.textContent = open ? "Close Debug" : "Debug";
+  debugToggle.setAttribute("aria-expanded", String(open));
 }
 
 const sceneApp = new BabylonScene({
@@ -43,6 +60,16 @@ const network = new GameNetworkClient({
 
 await sceneApp.init();
 setConnected(false);
+setDebugOpen(false);
+
+debugToggle.addEventListener("click", () => {
+  const open = debugPanel.dataset.open === "true";
+  setDebugOpen(!open);
+});
+
+logoutButton.addEventListener("click", () => {
+  network.leave();
+});
 
 connectButton.addEventListener("click", async () => {
   const username = usernameInput.value.trim() || `Player_${Math.random().toString(36).slice(2, 7)}`;
