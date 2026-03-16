@@ -18,12 +18,16 @@
   </div>
   <div id="controls">
     <button id="connectBtn">Connect & Join Room</button>
-    <button id="sendBtn" disabled>Send Message</button>
+    <button id="pingBtn" disabled>Send Ping</button>
   </div>
   <div id="log"></div>
 
   <script>
     const log = document.getElementById('log');
+    const connectBtn = document.getElementById('connectBtn');
+    const pingBtn = document.getElementById('pingBtn');
+    const usernameInput = document.getElementById('usernameInput');
+
     function logMsg(msg) {
       log.textContent += msg + '\n';
       log.scrollTop = log.scrollHeight;
@@ -31,64 +35,105 @@
 
     let client;
     let room;
+    let reconnectAttempts = 0;
 
-    // Build a WebSocket URL that matches the page's origin.
     function buildWsUrl() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       return `${protocol}//${location.host}`;
     }
 
-    document.getElementById('connectBtn').addEventListener('click', async () => {
-      const username = document.getElementById('usernameInput').value.trim() || `Player_${Math.random().toString(36).substr(2,5)}`;
+    function describePlayers(players) {
+      const list = [];
+
+      players.forEach((player, sessionId) => {
+        list.push(`${player.username} (${player.connected ? 'online' : 'reconnecting'}) [${sessionId.slice(0, 6)}]`);
+      });
+
+      return list.join(', ') || '(none)';
+    }
+
+    function bindRoom(nextRoom) {
+      room = nextRoom;
+      reconnectAttempts = 0;
+      connectBtn.disabled = true;
+      pingBtn.disabled = false;
+
+      room.onStateChange((state) => {
+        logMsg(`State: phase=${state.phase}, connected=${state.connectedPlayers}/${state.players.size}, players=${describePlayers(state.players)}`);
+      });
+
+      room.onMessage('lobbyStatus', (data) => {
+        logMsg(`Lobby: connected ${data.connected}/${data.max}, reserved ${data.reserved}, phase=${data.phase}`);
+      });
+
+      room.onMessage('gameStart', (data) => {
+        logMsg(`Game started in room ${data.roomId}`);
+        logMsg(`Players: ${data.players.map((player) => player.username).join(', ')}`);
+      });
+
+      room.onMessage('playerPing', (data) => {
+        logMsg(`Ping from ${data.username} at ${new Date(data.at).toLocaleTimeString()}`);
+      });
+
+      room.onMessage('playerDisconnected', (data) => {
+        logMsg(`${data.username} disconnected, waiting ${data.reconnectWindowSeconds}s for reconnect`);
+      });
+
+      room.onMessage('playerReconnected', (data) => {
+        logMsg(`${data.username} reconnected`);
+      });
+
+      room.onMessage('playerLeft', (data) => {
+        logMsg(`${data.username} left permanently`);
+      });
+
+      room.onLeave((code) => {
+        logMsg(`Disconnected from room (code ${code})`);
+        pingBtn.disabled = true;
+
+        const shouldReconnect = code !== 1000 && code !== 4001;
+
+        if (!shouldReconnect || !room || !room.reconnectionToken || reconnectAttempts >= 3) {
+          connectBtn.disabled = false;
+          return;
+        }
+
+        const currentToken = room.reconnectionToken;
+        reconnectAttempts += 1;
+
+        setTimeout(async () => {
+          try {
+            logMsg(`Attempting reconnect ${reconnectAttempts}/3...`);
+            const rejoinedRoom = await client.reconnect(currentToken);
+            logMsg(`Reconnected to room ${rejoinedRoom.roomId}`);
+            bindRoom(rejoinedRoom);
+          } catch (error) {
+            logMsg(`Reconnect failed: ${error}`);
+            connectBtn.disabled = false;
+          }
+        }, reconnectAttempts * 1000);
+      });
+    }
+
+    connectBtn.addEventListener('click', async () => {
+      const username = usernameInput.value.trim() || `Player_${Math.random().toString(36).slice(2, 7)}`;
+
       try {
         const wsUrl = buildWsUrl();
-        logMsg(`Connecting to ${wsUrl} …`);
-        client = new Colyseus.Client(wsUrl);
-        room = await client.joinOrCreate('game_room', { username });
-        logMsg(`Joined room: ${room.roomId} as ${username}`);
-
-        room.onStateChange(state => {
-          // Uncomment if you want to see state updates
-          // logMsg('State change: ' + JSON.stringify(state));
-        });
-
-        room.onMessage('waitingUpdate', data => {
-          logMsg(`Waiting: ${data.waiting}/${data.max} ${data.started ? '(started)' : '(waiting)'}`);
-        });
-
-        room.onMessage('gameStart', data => {
-          logMsg(`Game started: ${data.message}`);
-          logMsg('Players: ' + JSON.stringify(data.players));
-        });
-
-        room.onMessage('playerMessage', data => {
-          logMsg(`Player message from ${data.username} (${data.sessionId}): ${JSON.stringify(data.message)}`);
-        });
-
-        room.onMessage('error', data => {
-          logMsg(`Error: ${data.message}`);
-        });
-
-        room.onMessage('playerLeft', data => {
-          logMsg(`Player left: ${data.username} (${data.sessionId})`);
-        });
-
-        room.onMessage('playerListUpdate', data => {
-          logMsg(`Current players: ${data.players.map(p => p.username).join(', ')}`);
-        });
-
-        document.getElementById('connectBtn').disabled = true;
-        document.getElementById('sendBtn').disabled = false;
-      } catch (e) {
-        logMsg('Error: ' + e);
+        logMsg(`Connecting to ${wsUrl} ...`);
+        client = client || new Colyseus.Client(wsUrl);
+        const joinedRoom = await client.joinOrCreate('game_room', { username });
+        logMsg(`Joined room: ${joinedRoom.roomId} as ${username}`);
+        bindRoom(joinedRoom);
+      } catch (error) {
+        logMsg(`Error: ${error}`);
       }
     });
 
-    document.getElementById('sendBtn').addEventListener('click', () => {
+    pingBtn.addEventListener('click', () => {
       if (room) {
-        const msg = { hello: 'world', timestamp: Date.now() };
-        room.send(msg);
-        logMsg('Sent message: ' + JSON.stringify(msg));
+        room.send('ping');
+        logMsg('Sent ping');
       }
     });
   </script>

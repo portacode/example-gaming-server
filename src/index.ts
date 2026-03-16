@@ -1,23 +1,25 @@
 import express from "express";
 import { Server } from "colyseus";
-import { GameRoom } from "./rooms/GameRoom";
+import { createServer } from "http";
 import path from "path";
+import { WebSocketTransport } from "@colyseus/ws-transport";
+import { GameRoom } from "./rooms/GameRoom";
 
 const port = Number(process.env.PORT || 5000);
 const app = express();
+const server = createServer(app);
 
-// Serve static files from public directory
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(express.static(path.join(__dirname, "..", "public")));
 
 const gameServer = new Server({
-  server: require("http").createServer(app),
+  transport: new WebSocketTransport({
+    server,
+  }),
 });
 
-// register your room handlers
 gameServer.define("game_room", GameRoom).enableRealtimeListing();
 
-// serve index.html on root
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "..", "public", "index.html")));
 
-gameServer.listen(port);
-console.log(`🚀 Colyseus server is listening on port ${port}`);
+server.listen(port);
+console.log(`Colyseus server is listening on port ${port}`);
