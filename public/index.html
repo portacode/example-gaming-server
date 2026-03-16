@@ -36,6 +36,7 @@
     let client;
     let room;
     let reconnectAttempts = 0;
+    let latestPlayerView = null;
 
     function buildWsUrl() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -62,29 +63,20 @@
         logMsg(`State: phase=${state.phase}, connected=${state.connectedPlayers}/${state.players.size}, players=${describePlayers(state.players)}`);
       });
 
-      room.onMessage('lobbyStatus', (data) => {
-        logMsg(`Lobby: connected ${data.connected}/${data.max}, reserved ${data.reserved}, phase=${data.phase}`);
+      room.onMessage('playerView', (view) => {
+        latestPlayerView = view;
+        const visiblePlayers = view.visiblePlayers
+          .map((player) => `${player.username} (${player.connected ? 'online' : 'reconnecting'})`)
+          .join(', ');
+        logMsg(`View: self=${view.self ? view.self.username : 'none'}, phase=${view.phase}, players=${visiblePlayers || '(none)'}`);
+
+        if (view.lastPing) {
+          logMsg(`Last ping: ${view.lastPing.username} at ${new Date(view.lastPing.at).toLocaleTimeString()}`);
+        }
       });
 
-      room.onMessage('gameStart', (data) => {
-        logMsg(`Game started in room ${data.roomId}`);
-        logMsg(`Players: ${data.players.map((player) => player.username).join(', ')}`);
-      });
-
-      room.onMessage('playerPing', (data) => {
-        logMsg(`Ping from ${data.username} at ${new Date(data.at).toLocaleTimeString()}`);
-      });
-
-      room.onMessage('playerDisconnected', (data) => {
-        logMsg(`${data.username} disconnected, waiting ${data.reconnectWindowSeconds}s for reconnect`);
-      });
-
-      room.onMessage('playerReconnected', (data) => {
-        logMsg(`${data.username} reconnected`);
-      });
-
-      room.onMessage('playerLeft', (data) => {
-        logMsg(`${data.username} left permanently`);
+      room.onMessage('actionError', (data) => {
+        logMsg(`Action error: ${data.message}`);
       });
 
       room.onLeave((code) => {
@@ -132,8 +124,8 @@
 
     pingBtn.addEventListener('click', () => {
       if (room) {
-        room.send('ping');
-        logMsg('Sent ping');
+        room.send('action', { type: 'ping' });
+        logMsg(`Sent action: ping${latestPlayerView && latestPlayerView.self ? ` as ${latestPlayerView.self.username}` : ''}`);
       }
     });
   </script>
