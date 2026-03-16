@@ -9,7 +9,14 @@ const port = Number(process.env.PORT || 5000);
 const app = express();
 const server = createServer(app);
 
-app.use(express.static(path.join(__dirname, "..", "public")));
+app.use(express.static(path.join(__dirname, "..", "public"), {
+  setHeaders(res) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("Surrogate-Control", "no-store");
+  },
+}));
 
 const gameServer = new Server({
   transport: new WebSocketTransport({
@@ -19,7 +26,13 @@ const gameServer = new Server({
 
 gameServer.define("game_room", GameRoom).enableRealtimeListing();
 
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "..", "public", "index.html")));
+app.get("/", (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Surrogate-Control", "no-store");
+  res.sendFile(path.join(__dirname, "..", "public", "index.html"));
+});
 
 server.listen(port);
 console.log(`Colyseus server is listening on port ${port}`);
