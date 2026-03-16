@@ -1,133 +1,137 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Colyseus Test Client</title>
-  <script src="https://cdn.jsdelivr.net/npm/colyseus.js@0.15.14/dist/colyseus.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Colyseus Babylon Template</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 2em; }
-    #log { white-space: pre-line; background: #f4f4f4; padding: 1em; margin-top: 1em; height: 250px; overflow: auto; }
-    #controls { margin-top: 1em; }
-    input, button { margin: 0.2em; padding: 0.3em; }
+    :root {
+      --panel: rgba(247, 242, 231, 0.94);
+      --panel-border: rgba(56, 69, 79, 0.16);
+      --ink: #20313b;
+      --accent: #d56b2d;
+      --accent-strong: #ac4f18;
+      --canvas-bg: linear-gradient(180deg, #dff0ff 0%, #eef7ff 45%, #f8faf2 100%);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: Georgia, "Times New Roman", serif; color: var(--ink); }
+    body { display: grid; grid-template-columns: 340px 1fr; background: #d7decd; }
+    aside {
+      padding: 24px 20px;
+      background:
+        radial-gradient(circle at top left, rgba(255,255,255,0.6), transparent 38%),
+        linear-gradient(180deg, #ece6d8 0%, #ddd2bc 100%);
+      border-right: 1px solid rgba(43, 55, 62, 0.1);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    h1 { margin: 0; font-size: 2rem; line-height: 1.05; }
+    p { margin: 0; line-height: 1.45; }
+    .card {
+      padding: 16px;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      border-radius: 14px;
+      box-shadow: 0 12px 32px rgba(42, 45, 35, 0.08);
+    }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    label { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #5a645b; }
+    input, button {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid rgba(34, 46, 53, 0.12);
+      padding: 12px 14px;
+      font: inherit;
+    }
+    button {
+      background: var(--accent);
+      color: #fff8ef;
+      cursor: pointer;
+      transition: background 120ms ease, transform 120ms ease;
+    }
+    button:hover:enabled { background: var(--accent-strong); transform: translateY(-1px); }
+    button:disabled { cursor: not-allowed; opacity: 0.45; }
+    #log {
+      min-height: 180px;
+      max-height: 260px;
+      overflow: auto;
+      font-size: 0.92rem;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 8px;
+    }
+    main {
+      min-width: 0;
+      position: relative;
+      background: var(--canvas-bg);
+    }
+    #renderCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      touch-action: none;
+      outline: none;
+    }
+    .overlay {
+      position: absolute;
+      left: 24px;
+      top: 24px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(250, 246, 239, 0.86);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(56, 69, 79, 0.12);
+      max-width: min(480px, calc(100% - 48px));
+      box-shadow: 0 16px 40px rgba(20, 30, 36, 0.12);
+    }
+    .overlay strong { display: block; margin-bottom: 4px; }
+    @media (max-width: 900px) {
+      body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid rgba(43, 55, 62, 0.1); }
+      main { min-height: 60vh; }
+    }
   </style>
 </head>
 <body>
-  <h1>Colyseus Test Client</h1>
-  <div>
-    Label: <input type="text" id="usernameInput" placeholder="Enter username" />
-  </div>
-  <div id="controls">
-    <button id="connectBtn">Connect & Join Room</button>
-    <button id="pingBtn" disabled>Send Ping</button>
-  </div>
-  <div id="log"></div>
+  <aside>
+    <div class="stack">
+      <h1>Babylon + Colyseus</h1>
+      <p>Browser-native 3D client scaffold with room sync, player projections, reconnects, and a small Havok physics sandbox.</p>
+    </div>
 
-  <script>
-    const log = document.getElementById('log');
-    const connectBtn = document.getElementById('connectBtn');
-    const pingBtn = document.getElementById('pingBtn');
-    const usernameInput = document.getElementById('usernameInput');
+    <section class="card stack">
+      <div class="stack">
+        <label for="usernameInput">Player Name</label>
+        <input type="text" id="usernameInput" placeholder="Enter username">
+      </div>
+      <button id="connectBtn">Connect & Join Room</button>
+      <button id="pingBtn" disabled>Send Ping</button>
+    </section>
 
-    function logMsg(msg) {
-      log.textContent += msg + '\n';
-      log.scrollTop = log.scrollHeight;
-    }
+    <section class="card stack">
+      <strong>Controls</strong>
+      <p>Use <code>WASD</code> or the arrow keys to move. The current sample view only reveals players within a local radius.</p>
+    </section>
 
-    let client;
-    let room;
-    let reconnectAttempts = 0;
-    let latestPlayerView = null;
+    <section class="card stack">
+      <strong>Log</strong>
+      <div id="log"></div>
+    </section>
+  </aside>
 
-    function buildWsUrl() {
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      return `${protocol}//${location.host}`;
-    }
+  <main>
+    <canvas id="renderCanvas"></canvas>
+    <div class="overlay">
+      <strong id="roomStatus">Disconnected</strong>
+      <div id="playerStatus">No player view</div>
+    </div>
+  </main>
 
-    function describePlayers(players) {
-      const list = [];
-
-      players.forEach((player, sessionId) => {
-        list.push(`${player.username} (${player.connected ? 'online' : 'reconnecting'}) [${sessionId.slice(0, 6)}]`);
-      });
-
-      return list.join(', ') || '(none)';
-    }
-
-    function bindRoom(nextRoom) {
-      room = nextRoom;
-      reconnectAttempts = 0;
-      connectBtn.disabled = true;
-      pingBtn.disabled = false;
-
-      room.onStateChange((state) => {
-        logMsg(`State: phase=${state.phase}, connected=${state.connectedPlayers}/${state.players.size}, players=${describePlayers(state.players)}`);
-      });
-
-      room.onMessage('playerView', (view) => {
-        latestPlayerView = view;
-        const visiblePlayers = view.visiblePlayers
-          .map((player) => `${player.username} (${player.connected ? 'online' : 'reconnecting'})`)
-          .join(', ');
-        logMsg(`View: self=${view.self ? view.self.username : 'none'}, phase=${view.phase}, players=${visiblePlayers || '(none)'}`);
-
-        if (view.lastPing) {
-          logMsg(`Last ping: ${view.lastPing.username} at ${new Date(view.lastPing.at).toLocaleTimeString()}`);
-        }
-      });
-
-      room.onMessage('actionError', (data) => {
-        logMsg(`Action error: ${data.message}`);
-      });
-
-      room.onLeave((code) => {
-        logMsg(`Disconnected from room (code ${code})`);
-        pingBtn.disabled = true;
-
-        const shouldReconnect = code !== 1000 && code !== 4001;
-
-        if (!shouldReconnect || !room || !room.reconnectionToken || reconnectAttempts >= 3) {
-          connectBtn.disabled = false;
-          return;
-        }
-
-        const currentToken = room.reconnectionToken;
-        reconnectAttempts += 1;
-
-        setTimeout(async () => {
-          try {
-            logMsg(`Attempting reconnect ${reconnectAttempts}/3...`);
-            const rejoinedRoom = await client.reconnect(currentToken);
-            logMsg(`Reconnected to room ${rejoinedRoom.roomId}`);
-            bindRoom(rejoinedRoom);
-          } catch (error) {
-            logMsg(`Reconnect failed: ${error}`);
-            connectBtn.disabled = false;
-          }
-        }, reconnectAttempts * 1000);
-      });
-    }
-
-    connectBtn.addEventListener('click', async () => {
-      const username = usernameInput.value.trim() || `Player_${Math.random().toString(36).slice(2, 7)}`;
-
-      try {
-        const wsUrl = buildWsUrl();
-        logMsg(`Connecting to ${wsUrl} ...`);
-        client = client || new Colyseus.Client(wsUrl);
-        const joinedRoom = await client.joinOrCreate('game_room', { username });
-        logMsg(`Joined room: ${joinedRoom.roomId} as ${username}`);
-        bindRoom(joinedRoom);
-      } catch (error) {
-        logMsg(`Error: ${error}`);
-      }
-    });
-
-    pingBtn.addEventListener('click', () => {
-      if (room) {
-        room.send('action', { type: 'ping' });
-        logMsg(`Sent action: ping${latestPlayerView && latestPlayerView.self ? ` as ${latestPlayerView.self.username}` : ''}`);
-      }
-    });
-  </script>
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/havok/HavokPhysics_umd.js"></script>
+  <script src="https://unpkg.com/colyseus.js@0.15.14/dist/colyseus.js"></script>
+  <script type="module" src="/app/main.js"></script>
 </body>
 </html>
