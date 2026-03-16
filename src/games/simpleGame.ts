@@ -12,6 +12,11 @@ export interface SimplePlayer {
   sessionId: string;
   username: string;
   connected: boolean;
+  heading: number;
+  velocity: {
+    x: number;
+    z: number;
+  };
   position: {
     x: number;
     y: number;
@@ -37,6 +42,11 @@ export interface SimpleGameView {
     sessionId: string;
     username: string;
     connected: boolean;
+    heading: number;
+    velocity: {
+      x: number;
+      z: number;
+    };
     position: {
       x: number;
       y: number;
@@ -63,13 +73,12 @@ export interface PingAction {
   type: "ping";
 }
 
-export interface MoveAction {
-  type: "move";
-  x: number;
-  z: number;
+export interface SteerAction {
+  type: "steer";
+  heading: number;
 }
 
-export type SimpleGameAction = PingAction | MoveAction;
+export type SimpleGameAction = PingAction | SteerAction;
 
 export class SimpleRoomState extends BaseRoomState {
   @type("string") lastPingBy = "";
@@ -78,10 +87,6 @@ export class SimpleRoomState extends BaseRoomState {
 
 function getConnectedPlayers(state: SimpleGameState) {
   return Object.values(state.players).filter((player) => player.connected).length;
-}
-
-function clampMovement(value: number) {
-  return Math.max(-1, Math.min(1, value));
 }
 
 function clampPosition(value: number) {
@@ -106,6 +111,29 @@ function canSeePlayer(viewer: SimplePlayer, target: SimplePlayer) {
 
   return distanceSquared <= 144;
 }
+
+function normalizeAngle(angle: number) {
+  const turn = Math.PI * 2;
+  return ((angle % turn) + turn) % turn;
+}
+
+function clampSpeed(x: number, z: number, maxSpeed: number) {
+  const speed = Math.hypot(x, z);
+  if (speed <= maxSpeed || speed === 0) {
+    return { x, z };
+  }
+
+  const scale = maxSpeed / speed;
+  return {
+    x: x * scale,
+    z: z * scale,
+  };
+}
+
+const MOVEMENT_FORCE = 18;
+const MOVEMENT_DRAG = 4.5;
+const MAX_SPEED = 7.5;
+const POSITION_LIMIT = 14;
 
 function syncPlayerPresenceMap(roomPlayers: MapSchema<PlayerPresenceState>, state: SimpleGameState) {
   const playerIds = new Set(Object.keys(state.players));
@@ -161,11 +189,17 @@ export const simpleGameDefinition: GameDefinition<
   onPlayerJoin(state, { client, options }) {
     const username = options.username ?? `Player_${client.sessionId.slice(0, 6)}`;
     const spawnIndex = Object.keys(state.players).length;
+    const spawnPosition = createSpawnPosition(spawnIndex);
     state.players[client.sessionId] = {
       sessionId: client.sessionId,
       username,
       connected: true,
-      position: createSpawnPosition(spawnIndex),
+      heading: normalizeAngle(angleToHeading(spawnPosition)),
+      velocity: {
+        x: 0,
+        z: 0,
+      },
+      position: spawnPosition,
     };
 
     if (getConnectedPlayers(state) >= state.maxPlayers) {
@@ -184,6 +218,8 @@ export const simpleGameDefinition: GameDefinition<
     const player = state.players[client.sessionId];
     if (player) {
       player.connected = false;
+      player.velocity.x = 0;
+      player.velocity.z = 0;
     }
   },
 
@@ -202,13 +238,56 @@ export const simpleGameDefinition: GameDefinition<
         state.lastPingBy = player.username;
         state.lastPingAt = Date.now();
         return;
-      case "move":
-        player.position.x = clampPosition(player.position.x + clampMovement(action.x));
-        player.position.z = clampPosition(player.position.z + clampMovement(action.z));
+      case "steer":
+        player.heading = normalizeAngle(action.heading);
         return;
       default:
         throw new Error(`Unsupported action: ${(action as { type: string }).type}`);
     }
+  },
+
+  tick(state, { deltaTimeMs }) {
+    const deltaSeconds = deltaTimeMs / 1000;
+    let changed = false;
+
+    Object.values(state.players).forEach((player) => {
+      if (!player.connected) {
+        return;
+      }
+
+      const forceX = Math.cos(player.heading) * MOVEMENT_FORCE;
+      const forceZ = Math.sin(player.heading) * MOVEMENT_FORCE;
+
+      player.velocity.x += forceX * deltaSeconds;
+      player.velocity.z += forceZ * deltaSeconds;
+
+      const dragFactor = Math.max(0, 1 - MOVEMENT_DRAG * deltaSeconds);
+      player.velocity.x *= dragFactor;
+      player.velocity.z *= dragFactor;
+
+      const clampedVelocity = clampSpeed(player.velocity.x, player.velocity.z, MAX_SPEED);
+      player.velocity.x = clampedVelocity.x;
+      player.velocity.z = clampedVelocity.z;
+
+      const nextX = clampPosition(player.position.x + player.velocity.x * deltaSeconds);
+      const nextZ = clampPosition(player.position.z + player.velocity.z * deltaSeconds);
+
+      if (nextX !== player.position.x || nextZ !== player.position.z) {
+        player.position.x = nextX;
+        player.position.z = nextZ;
+        changed = true;
+      }
+
+      if (Math.abs(player.position.x) >= POSITION_LIMIT) {
+        player.velocity.x = 0;
+      }
+
+      if (Math.abs(player.position.z) >= POSITION_LIMIT) {
+        player.velocity.z = 0;
+      }
+    });
+
+    return changed;
   },
 
   projectView(state, viewerSessionId) {
@@ -238,6 +317,11 @@ export const simpleGameDefinition: GameDefinition<
             sessionId: self.sessionId,
             username: self.username,
             connected: self.connected,
+            heading: self.heading,
+            velocity: {
+              x: self.velocity.x,
+              z: self.velocity.z,
+            },
             position: {
               x: self.position.x,
               y: self.position.y,
@@ -269,3 +353,7 @@ export const simpleGameDefinition: GameDefinition<
     return state.phase !== "active";
   },
 };
+
+function angleToHeading(position: { x: number; z: number }) {
+  return Math.atan2(position.z, position.x);
+}

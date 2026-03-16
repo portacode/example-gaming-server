@@ -39,8 +39,8 @@ function setDebugOpen(open) {
 
 const sceneApp = new BabylonScene({
   canvas,
-  onMove: ({ x, z }) => {
-    network.sendAction({ type: "move", x, z });
+  onHeadingChange: (heading) => {
+    network.sendAction({ type: "steer", heading });
   },
 });
 

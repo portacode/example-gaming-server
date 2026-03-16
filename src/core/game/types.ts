@@ -25,6 +25,12 @@ export interface PlayerContext {
   roomId: string;
 }
 
+export interface TickContext {
+  roomId: string;
+  maxClients: number;
+  deltaTimeMs: number;
+}
+
 export interface GameDefinition<
   TInternalState,
   TRoomState extends BaseRoomState,
@@ -41,6 +47,7 @@ export interface GameDefinition<
   onPlayerDisconnect?(state: TInternalState, context: PlayerContext): void;
   onPlayerLeave?(state: TInternalState, context: PlayerContext): void;
   applyAction(state: TInternalState, context: PlayerContext, action: TAction): void;
+  tick?(state: TInternalState, context: TickContext): boolean;
   projectView(state: TInternalState, viewerSessionId: string): TPlayerView;
   syncRoomState(roomState: TRoomState, state: TInternalState, roomId: string, maxClients: number): void;
   isOpenForNewPlayers?(state: TInternalState): boolean;

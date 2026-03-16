@@ -26,6 +26,10 @@ export abstract class BaseGameRoom<
     return 300;
   }
 
+  protected getSimulationIntervalMs() {
+    return 50;
+  }
+
   onCreate(options: TCreateOptions) {
     const roomState = this.createRoomState();
     roomState.roomId = this.roomId;
@@ -41,6 +45,18 @@ export abstract class BaseGameRoom<
     this.onMessage("action", (client, action: TAction) => {
       this.handleAction(client, action);
     });
+
+    if (this.definition.tick) {
+      this.setSimulationInterval((deltaTimeMs) => {
+        if (this.definition.tick?.(this.internalState, {
+          roomId: this.roomId,
+          maxClients: this.maxClients,
+          deltaTimeMs,
+        })) {
+          this.syncState();
+        }
+      }, this.getSimulationIntervalMs());
+    }
 
     this.syncState();
   }

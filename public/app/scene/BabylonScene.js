@@ -1,13 +1,14 @@
 export class BabylonScene {
-  constructor({ canvas, onMove }) {
+  constructor({ canvas, onHeadingChange }) {
     this.canvas = canvas;
-    this.onMove = onMove;
+    this.onHeadingChange = onHeadingChange;
     this.engine = null;
     this.scene = null;
     this.camera = null;
     this.playerMeshes = new Map();
-    this.keys = new Set();
-    this.moveTimer = null;
+    this.selfPosition = null;
+    this.lastHeading = null;
+    this.lastHeadingSentAt = 0;
   }
 
   async init() {
@@ -17,9 +18,9 @@ export class BabylonScene {
 
     await this.enablePhysics();
     this.createEnvironment();
-    this.attachControls();
 
     this.engine.runRenderLoop(() => {
+      this.syncHeadingIntent();
       this.scene.render();
     });
 
@@ -53,7 +54,15 @@ export class BabylonScene {
     });
 
     if (view.self && this.camera) {
+      this.selfPosition = {
+        x: view.self.position.x,
+        y: view.self.position.y,
+        z: view.self.position.z,
+      };
       this.camera.setTarget(new BABYLON.Vector3(view.self.position.x, 0.5, view.self.position.z));
+    } else {
+      this.selfPosition = null;
+      this.lastHeading = null;
     }
   }
 
@@ -127,35 +136,27 @@ export class BabylonScene {
     return mesh;
   }
 
-  attachControls() {
-    window.addEventListener("keydown", (event) => {
-      this.keys.add(event.key.toLowerCase());
-    });
+  syncHeadingIntent() {
+    if (!this.selfPosition || !this.camera) {
+      return;
+    }
 
-    window.addEventListener("keyup", (event) => {
-      this.keys.delete(event.key.toLowerCase());
-    });
+    const cameraPosition = this.camera.position;
+    const heading = Math.atan2(
+      this.selfPosition.z - cameraPosition.z,
+      this.selfPosition.x - cameraPosition.x,
+    );
+    const now = performance.now();
 
-    this.moveTimer = window.setInterval(() => {
-      let x = 0;
-      let z = 0;
+    if (this.lastHeading !== null) {
+      const delta = Math.atan2(Math.sin(heading - this.lastHeading), Math.cos(heading - this.lastHeading));
+      if (Math.abs(delta) < 0.04 && now - this.lastHeadingSentAt < 250) {
+        return;
+      }
+    }
 
-      if (this.keys.has("a") || this.keys.has("arrowleft")) {
-        x -= 1;
-      }
-      if (this.keys.has("d") || this.keys.has("arrowright")) {
-        x += 1;
-      }
-      if (this.keys.has("w") || this.keys.has("arrowup")) {
-        z += 1;
-      }
-      if (this.keys.has("s") || this.keys.has("arrowdown")) {
-        z -= 1;
-      }
-
-      if (x !== 0 || z !== 0) {
-        this.onMove({ x, z });
-      }
-    }, 120);
+    this.lastHeading = heading;
+    this.lastHeadingSentAt = now;
+    this.onHeadingChange?.(heading);
   }
 }
