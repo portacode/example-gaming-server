@@ -109,7 +109,7 @@ function canSeePlayer(viewer: SimplePlayer, target: SimplePlayer) {
   const dz = viewer.position.z - target.position.z;
   const distanceSquared = dx * dx + dz * dz;
 
-  return distanceSquared <= 144;
+  return distanceSquared <= VISIBILITY_RADIUS * VISIBILITY_RADIUS;
 }
 
 function normalizeAngle(angle: number) {
@@ -134,6 +134,7 @@ const MOVEMENT_FORCE = 18;
 const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
 const POSITION_LIMIT = 14;
+const VISIBILITY_RADIUS = 36;
 
 function syncPlayerPresenceMap(roomPlayers: MapSchema<PlayerPresenceState>, state: SimpleGameState) {
   const playerIds = new Set(Object.keys(state.players));
