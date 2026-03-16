@@ -1,13 +1,17 @@
 import { Room, Client } from "colyseus";
 import { Schema, type, MapSchema } from "@colyseus/schema";
 
-// Configuration: change this value to adjust required players per game
 export const PLAYERS_PER_GAME = 4;
+
+export class PlayerState extends Schema {
+  @type("string") sessionId = "";
+  @type("string") id = "";
+  @type("string") username = "";
+}
 
 export class GameState extends Schema {
   @type("string") roomId = "";
-  @type({ map: "string" }) players = new MapSchema<string>();
-  @type("number") waiting = 0;
+  @type({ map: PlayerState }) players = new MapSchema<PlayerState>();
   @type("boolean") started = false;
 }
 
@@ -17,17 +21,19 @@ export class GameRoom extends Room<GameState> {
   onCreate(options: any) {
     this.setState(new GameState());
     this.state.roomId = this.roomId;
-    this.state.waiting = 0;
     this.state.started = false;
     console.log(`Room ${this.roomId} created (max ${this.maxClients} players)`);
 
     // Handle any incoming message and broadcast as playerMessage
     this.onMessage("*", (client, type, message) => {
-      this.broadcast("playerMessage", {
-        sessionId: client.sessionId,
-        type,
-        message,
-      } as any);
+      // Only broadcast if game started
+      if (this.state.started) {
+        this.broadcast("playerMessage", {
+          sessionId: client.sessionId,
+          type,
+          message,
+        } as any);
+      }
     });
   }
 
@@ -37,45 +43,61 @@ export class GameRoom extends Room<GameState> {
       this.send(client, { type: "error", message: "Game already started" } as any);
       return;
     }
-    // add player
-    this.state.players.set(client.sessionId, client.id ?? "");
-    this.state.waiting = this.state.players.size;
+    const username = options?.username ?? `Player_${client.sessionId.slice(0, 6)}`;
+    const player = new PlayerState();
+    player.sessionId = client.sessionId;
+    player.id = client.id ?? "";
+    player.username = username;
+    this.state.players.set(client.sessionId, player);
     this.broadcast("waitingUpdate", {
-      waiting: this.state.waiting,
+      waiting: Object.keys(this.state.players).length,
       max: this.maxClients,
       started: this.state.started,
     } as any);
 
     // If enough players, start the game
-    if (this.state.waiting >= this.maxClients) {
+    if (Object.keys(this.state.players).length >= this.maxClients) {
       this.state.started = true;
       this.broadcast("gameStart", {
         message: "Enough players! Game started.",
-        players: Array.from(this.state.players.values()),
+        players: Array.from(this.state.players.values()).map(p => ({
+          sessionId: p.sessionId,
+          id: p.id,
+          username: p.username,
+        })),
       } as any);
-      // Here you would initialize your game state, start timers, etc.
-      console.log(`Room ${this.roomId} started with ${this.state.waiting} players`);
+      console.log(`Room ${this.roomId} started with ${Object.keys(this.state.players).length} players`);
     }
   }
 
   onLeave(client: Client, consented: boolean) {
-    if (this.state.started) {
-      // Optional: handle player disconnect during game
-      this.state.players.delete(client.sessionId);
-      this.state.waiting = this.state.players.size;
-      this.broadcast("waitingUpdate", {
-        waiting: this.state.waiting,
-        max: this.maxClients,
-        started: this.state.started,
-      } as any);
-    } else {
-      this.state.players.delete(client.sessionId);
-      this.state.waiting = this.state.players.size;
-      this.broadcast("waitingUpdate", {
-        waiting: this.state.waiting,
-        max: this.maxClients,
-        started: this.state.started,
-      } as any);
+    const player = this.state.players.get(client.sessionId);
+    if (player) {
+      if (this.state.started) {
+        // Game in progress: inform others that player left, but game continues
+        this.broadcast("playerLeft", {
+          sessionId: client.sessionId,
+          username: player.username,
+        } as any);
+        // Remove player from map
+        this.state.players.delete(client.sessionId);
+        // Optionally broadcast updated player list
+        this.broadcast("playerListUpdate", {
+          players: Array.from(this.state.players.values()).map(p => ({
+            sessionId: p.sessionId,
+            id: p.id,
+            username: p.username,
+          })),
+        } as any);
+      } else {
+        // Still waiting for players to start
+        this.state.players.delete(client.sessionId);
+        this.broadcast("waitingUpdate", {
+          waiting: Object.keys(this.state.players).length,
+          max: this.maxClients,
+          started: this.state.started,
+        } as any);
+      }
     }
   }
 

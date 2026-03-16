@@ -6,14 +6,20 @@
   <script src="https://cdn.jsdelivr.net/npm/colyseus.js@0.15.14/dist/colyseus.js"></script>
   <style>
     body { font-family: Arial, sans-serif; margin: 2em; }
-    #log { white-space: pre-line; background: #f4f4f4; padding: 1em; margin-top: 1em; height: 200px; overflow: auto; }
-    button { margin: 0.5em; padding: 0.5em 1em; }
+    #log { white-space: pre-line; background: #f4f4f4; padding: 1em; margin-top: 1em; height: 250px; overflow: auto; }
+    #controls { margin-top: 1em; }
+    input, button { margin: 0.2em; padding: 0.3em; }
   </style>
 </head>
 <body>
   <h1>Colyseus Test Client</h1>
-  <button id="connectBtn">Connect & Join Room</button>
-  <button id="sendBtn" disabled>Send Message</button>
+  <div>
+    Label: <input type="text" id="usernameInput" placeholder="Enter username" />
+  </div>
+  <div id="controls">
+    <button id="connectBtn">Connect & Join Room</button>
+    <button id="sendBtn" disabled>Send Message</button>
+  </div>
   <div id="log"></div>
 
   <script>
@@ -33,12 +39,13 @@
     }
 
     document.getElementById('connectBtn').addEventListener('click', async () => {
+      const username = document.getElementById('usernameInput').value.trim() || `Player_${Math.random().toString(36).substr(2,5)}`;
       try {
         const wsUrl = buildWsUrl();
         logMsg(`Connecting to ${wsUrl} …`);
         client = new Colyseus.Client(wsUrl);
-        room = await client.joinOrCreate('game_room');
-        logMsg(`Joined room: ${room.roomId}`);
+        room = await client.joinOrCreate('game_room', { username });
+        logMsg(`Joined room: ${room.roomId} as ${username}`);
 
         room.onStateChange(state => {
           // Uncomment if you want to see state updates
@@ -51,6 +58,7 @@
 
         room.onMessage('gameStart', data => {
           logMsg(`Game started: ${data.message}`);
+          logMsg('Players: ' + JSON.stringify(data.players));
         });
 
         room.onMessage('playerMessage', data => {
@@ -59,6 +67,14 @@
 
         room.onMessage('error', data => {
           logMsg(`Error: ${data.message}`);
+        });
+
+        room.onMessage('playerLeft', data => {
+          logMsg(`Player left: ${data.username} (${data.sessionId})`);
+        });
+
+        room.onMessage('playerListUpdate', data => {
+          logMsg(`Current players: ${data.players.map(p => p.username).join(', ')}`);
         });
 
         document.getElementById('connectBtn').disabled = true;
