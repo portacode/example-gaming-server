@@ -12,6 +12,12 @@ const loginModal = document.getElementById("loginModal");
 const debugPanel = document.getElementById("debugPanel");
 const debugToggle = document.getElementById("debugToggle");
 const logoutButton = document.getElementById("logoutBtn");
+const modalTitle = document.getElementById("modalTitle");
+const modalCopy = document.getElementById("modalCopy");
+const loginFormCard = document.getElementById("loginFormCard");
+const controlsCard = document.getElementById("controlsCard");
+const reconnectCard = document.getElementById("reconnectCard");
+const reconnectStatus = document.getElementById("reconnectStatus");
 
 function log(message) {
   const line = document.createElement("div");
@@ -19,12 +25,36 @@ function log(message) {
   logPanel.prepend(line);
 }
 
-function setConnected(connected) {
-  connectButton.disabled = connected;
+function setConnectionState(status) {
+  const state = typeof status === "string" ? status : status.state;
+  const connected = state === "connected";
+  const reconnecting = state === "reconnecting";
+  const connecting = state === "connecting";
+  const showModal = state !== "connected";
+
+  connectButton.disabled = connecting || reconnecting;
   pingButton.disabled = !connected;
-  loginModal.dataset.visible = String(!connected);
+  loginModal.dataset.visible = String(showModal);
+  loginModal.dataset.mode = state;
   logoutButton.hidden = !connected;
   debugToggle.hidden = !connected;
+  loginFormCard.hidden = reconnecting;
+  controlsCard.hidden = reconnecting;
+  reconnectCard.hidden = !reconnecting;
+
+  if (state === "connecting") {
+    modalTitle.textContent = "Joining Match";
+    modalCopy.textContent = "Connecting to the server and reserving your seat.";
+  } else if (state === "reconnecting") {
+    modalTitle.textContent = "Reconnecting";
+    modalCopy.textContent = "Your session is still reserved. Please wait while we reconnect you to the match.";
+    reconnectStatus.textContent = `Reconnect attempt ${status.attempt}/${status.maxAttempts}...`;
+  } else {
+    modalTitle.textContent = "Enter The World";
+    modalCopy.textContent = status.reason === "token_expired"
+      ? "Your previous match could not be recovered because the reconnect token expired. You can safely join a new game now."
+      : "Connect to a Colyseus room, render the scene in Babylon.js, and keep the debug tools tucked away until you need them.";
+  }
 
   if (!connected) {
     setDebugOpen(false);
@@ -55,11 +85,11 @@ const network = new GameNetworkClient({
     sceneApp.applyView(view);
   },
   onLog: log,
-  onConnectionChange: setConnected,
+  onConnectionChange: setConnectionState,
 });
 
 await sceneApp.init();
-setConnected(false);
+setConnectionState({ state: "disconnected" });
 setDebugOpen(false);
 
 debugToggle.addEventListener("click", () => {
@@ -77,7 +107,7 @@ connectButton.addEventListener("click", async () => {
     await network.connect(username);
   } catch (error) {
     log(`Connection error: ${error}`);
-    setConnected(false);
+    setConnectionState({ state: "disconnected", reason: "connect_failed" });
   }
 });
 

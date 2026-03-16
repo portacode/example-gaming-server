@@ -229,11 +229,11 @@
       <div class="modalCard stack">
         <div class="stack">
           <div class="eyebrow">Browser Multiplayer Template</div>
-          <h1>Enter The World</h1>
-          <p class="heroCopy">Connect to a Colyseus room, render the scene in Babylon.js, and keep the debug tools tucked away until you need them.</p>
+          <h1 id="modalTitle">Enter The World</h1>
+          <p id="modalCopy" class="heroCopy">Connect to a Colyseus room, render the scene in Babylon.js, and keep the debug tools tucked away until you need them.</p>
         </div>
 
-        <section class="card stack">
+        <section id="loginFormCard" class="card stack">
           <label for="usernameInput">Player Name</label>
           <input type="text" id="usernameInput" placeholder="Enter username">
           <div class="buttonRow">
@@ -242,9 +242,14 @@
           </div>
         </section>
 
-        <section class="card stack">
+        <section id="controlsCard" class="card stack">
           <strong>Controls</strong>
           <p>Rotate the camera to steer. The server continuously pushes your player away from the camera with acceleration and drag, so changing the camera angle changes your travel direction.</p>
+        </section>
+
+        <section id="reconnectCard" class="card stack" hidden>
+          <strong>Match Recovery</strong>
+          <p id="reconnectStatus">Reconnect attempt 1/3...</p>
         </section>
       </div>
     </section>
