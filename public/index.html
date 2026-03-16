@@ -62,7 +62,7 @@
         });
 
         room.onMessage('playerMessage', data => {
-          logMsg(`Player message from ${data.sessionId}: ${JSON.stringify(data.message)}`);
+          logMsg(`Player message from ${data.username} (${data.sessionId}): ${JSON.stringify(data.message)}`);
         });
 
         room.onMessage('error', data => {

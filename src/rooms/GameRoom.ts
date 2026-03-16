@@ -27,8 +27,10 @@ export class GameRoom extends Room<GameState> {
     // Handle any incoming message and broadcast as playerMessage (only if game started)
     this.onMessage("*", (client, message) => {
       if (this.state.started) {
+        const player = this.state.players.get(client.sessionId);
         this.broadcast("playerMessage", {
           sessionId: client.sessionId,
+          username: player ? player.username : "",
           message,
         });
       }
