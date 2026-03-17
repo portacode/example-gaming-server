@@ -40,6 +40,11 @@ const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
 const PLAYER_VISUAL_Y_OFFSET = 1;
 const TARGET_AVATAR_HEIGHT = 2.2;
+const PLAYER_LABEL_Y_OFFSET = 3.2;
+const PLAYER_LABEL_WIDTH = 2.6;
+const PLAYER_LABEL_HEIGHT = 0.7;
+const PLAYER_LABEL_TEXTURE_WIDTH = 512;
+const PLAYER_LABEL_TEXTURE_HEIGHT = 128;
 const PLAYER_COLLIDER_RADIUS = 0.35;
 const PLAYER_COLLIDER_HEIGHT = 1.8;
 const PLAYER_GRAVITY = 28;
@@ -234,6 +239,7 @@ export class BabylonScene {
         this.playerMeshes.set(player.sessionId, avatar);
       }
 
+      this.updateAvatarLabel(avatar, player);
       this.recordPlayerSnapshot(player.sessionId, player, view.serverTime);
     });
 
@@ -1250,6 +1256,8 @@ export class BabylonScene {
         lockedNodes,
         collisionProxy: null,
         verticalVelocity: 0,
+        labelPlane: this.createPlayerLabelPlane(root),
+        labelText: "",
       };
     }
 
@@ -1278,6 +1286,8 @@ export class BabylonScene {
         lockedNodes: [],
         collisionProxy: null,
         verticalVelocity: 0,
+        labelPlane: this.createPlayerLabelPlane(root),
+        labelText: "",
       };
   }
 
@@ -1499,9 +1509,73 @@ export class BabylonScene {
     );
   }
 
+  createPlayerLabelPlane(root) {
+    const plane = BABYLON.MeshBuilder.CreatePlane(`player-label-${this.playerMeshes.size}`, {
+      width: PLAYER_LABEL_WIDTH,
+      height: PLAYER_LABEL_HEIGHT,
+    }, this.scene);
+    const texture = new BABYLON.DynamicTexture(`player-label-texture-${this.playerMeshes.size}`, {
+      width: PLAYER_LABEL_TEXTURE_WIDTH,
+      height: PLAYER_LABEL_TEXTURE_HEIGHT,
+    }, this.scene, true);
+    const material = new BABYLON.StandardMaterial(`player-label-material-${this.playerMeshes.size}`, this.scene);
+    material.diffuseTexture = texture;
+    material.emissiveTexture = texture;
+    material.opacityTexture = texture;
+    material.disableLighting = true;
+    material.backFaceCulling = false;
+    plane.material = material;
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.parent = root;
+    plane.position.y = PLAYER_LABEL_Y_OFFSET;
+    plane.isPickable = false;
+    this.drawPlayerLabel(plane, "");
+    return plane;
+  }
+
+  drawPlayerLabel(plane, text) {
+    const texture = plane?.material?.diffuseTexture;
+    if (!texture) {
+      return;
+    }
+
+    const context = texture.getContext();
+    context.clearRect(0, 0, PLAYER_LABEL_TEXTURE_WIDTH, PLAYER_LABEL_TEXTURE_HEIGHT);
+    if (text) {
+      context.fillStyle = "rgba(21, 24, 28, 0.78)";
+      context.fillRect(8, 12, PLAYER_LABEL_TEXTURE_WIDTH - 16, PLAYER_LABEL_TEXTURE_HEIGHT - 24);
+      context.strokeStyle = "rgba(255, 244, 214, 0.9)";
+      context.lineWidth = 4;
+      context.strokeRect(8, 12, PLAYER_LABEL_TEXTURE_WIDTH - 16, PLAYER_LABEL_TEXTURE_HEIGHT - 24);
+      context.font = "bold 34px Georgia";
+      context.fillStyle = "#fff7dc";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(text, PLAYER_LABEL_TEXTURE_WIDTH / 2, PLAYER_LABEL_TEXTURE_HEIGHT / 2 + 2);
+    }
+    texture.update();
+  }
+
+  updateAvatarLabel(avatar, player) {
+    if (!avatar?.labelPlane) {
+      return;
+    }
+
+    const playerNumber = Number.isInteger(player.playerNumber) && player.playerNumber > 0 ? player.playerNumber : "?";
+    const nextText = `P${playerNumber} ${player.username}`;
+    if (avatar.labelText === nextText) {
+      return;
+    }
+
+    avatar.labelText = nextText;
+    this.drawPlayerLabel(avatar.labelPlane, nextText);
+  }
+
   disposePlayerAvatar(avatar) {
     avatar.animationGroups.forEach((group) => group.dispose());
     avatar.collisionProxy?.dispose(false, true);
+    avatar.labelPlane?.material?.dispose(false, true);
+    avatar.labelPlane?.dispose(false, true);
     avatar.root.dispose(false, true);
   }
 

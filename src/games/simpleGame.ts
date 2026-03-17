@@ -10,6 +10,7 @@ export interface SimpleJoinOptions {
 
 export interface SimplePlayer {
   sessionId: string;
+  playerNumber: number;
   username: string;
   connected: boolean;
   heading: number;
@@ -42,6 +43,7 @@ export interface SimpleGameView {
   serverTime: number;
   self: {
     sessionId: string;
+    playerNumber: number;
     username: string;
     connected: boolean;
     heading: number;
@@ -57,6 +59,7 @@ export interface SimpleGameView {
   } | null;
   visiblePlayers: Array<{
     sessionId: string;
+    playerNumber: number;
     username: string;
     connected: boolean;
     heading: number;
@@ -120,6 +123,31 @@ function clampVerticalPosition(value: number) {
 
 function sanitizeVerticalPosition(value: number, fallback = 0) {
   return Number.isFinite(value) ? clampVerticalPosition(value) : fallback;
+}
+
+function ensurePlayerNumbers(state: SimpleGameState) {
+  const usedNumbers = new Set<number>();
+
+  Object.values(state.players).forEach((player) => {
+    if (Number.isInteger(player.playerNumber) && player.playerNumber > 0) {
+      usedNumbers.add(player.playerNumber);
+    }
+  });
+
+  let nextNumber = 1;
+  Object.values(state.players).forEach((player) => {
+    if (Number.isInteger(player.playerNumber) && player.playerNumber > 0) {
+      return;
+    }
+
+    while (usedNumbers.has(nextNumber)) {
+      nextNumber += 1;
+    }
+
+    player.playerNumber = nextNumber;
+    usedNumbers.add(nextNumber);
+    nextNumber += 1;
+  });
 }
 
 function createSpawnPosition(index: number) {
@@ -221,11 +249,13 @@ export const simpleGameDefinition: GameDefinition<
   },
 
   onPlayerJoin(state, { client, options }) {
+    ensurePlayerNumbers(state);
     const username = options.username ?? `Player_${client.sessionId.slice(0, 6)}`;
     const spawnIndex = Object.keys(state.players).length;
     const spawnPosition = createSpawnPosition(spawnIndex);
     state.players[client.sessionId] = {
       sessionId: client.sessionId,
+      playerNumber: spawnIndex + 1,
       username,
       connected: true,
       heading: normalizeAngle(angleToHeading(spawnPosition)),
@@ -243,6 +273,7 @@ export const simpleGameDefinition: GameDefinition<
   },
 
   onPlayerReconnect(state, { client }) {
+    ensurePlayerNumbers(state);
     const player = state.players[client.sessionId];
     if (player) {
       player.connected = true;
@@ -265,6 +296,7 @@ export const simpleGameDefinition: GameDefinition<
   },
 
   applyAction(state, { client }, action) {
+    ensurePlayerNumbers(state);
     const player = state.players[client.sessionId];
     if (!player || !player.connected) {
       throw new Error("Player is not currently connected.");
@@ -318,12 +350,14 @@ export const simpleGameDefinition: GameDefinition<
   },
 
   projectView(state, viewerSessionId) {
+    ensurePlayerNumbers(state);
     const self = state.players[viewerSessionId];
     const visiblePlayers = self
       ? Object.values(state.players)
           .filter((player) => player.sessionId === self.sessionId || canSeePlayer(self, player))
           .map((player) => ({
             sessionId: player.sessionId,
+            playerNumber: player.playerNumber,
             username: player.username,
             connected: player.connected,
             heading: player.heading,
@@ -348,6 +382,7 @@ export const simpleGameDefinition: GameDefinition<
       self: self
         ? {
             sessionId: self.sessionId,
+            playerNumber: self.playerNumber,
             username: self.username,
             connected: self.connected,
             heading: self.heading,
