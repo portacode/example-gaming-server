@@ -13,6 +13,7 @@ export interface SimplePlayer {
   username: string;
   connected: boolean;
   heading: number;
+  lastAcceptedMoveAt: number;
   velocity: {
     x: number;
     z: number;
@@ -84,7 +85,21 @@ export interface SteerAction {
   heading: number;
 }
 
-export type SimpleGameAction = PingAction | SteerAction;
+export interface MoveAction {
+  type: "move";
+  heading: number;
+  velocity: {
+    x: number;
+    z: number;
+  };
+  position: {
+    x: number;
+    y: number;
+    z: number;
+  };
+}
+
+export type SimpleGameAction = PingAction | SteerAction | MoveAction;
 
 export class SimpleRoomState extends BaseRoomState {
   @type("string") lastPingBy = "";
@@ -97,6 +112,10 @@ function getConnectedPlayers(state: SimpleGameState) {
 
 function clampPosition(value: number) {
   return Math.max(-14, Math.min(14, value));
+}
+
+function clampVerticalPosition(value: number) {
+  return Math.max(0, Math.min(16, value));
 }
 
 function createSpawnPosition(index: number) {
@@ -136,10 +155,10 @@ function clampSpeed(x: number, z: number, maxSpeed: number) {
   };
 }
 
-const MOVEMENT_FORCE = 18;
-const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
 const VISIBILITY_RADIUS = 100;
+const MAX_POSITION_TOLERANCE = 0.9;
+const MIN_MOVE_DT_MS = 16;
 
 function syncPlayerPresenceMap(roomPlayers: MapSchema<PlayerPresenceState>, state: SimpleGameState) {
   const playerIds = new Set(Object.keys(state.players));
@@ -201,6 +220,7 @@ export const simpleGameDefinition: GameDefinition<
       username,
       connected: true,
       heading: normalizeAngle(angleToHeading(spawnPosition)),
+      lastAcceptedMoveAt: Date.now(),
       velocity: {
         x: 0,
         z: 0,
@@ -217,6 +237,7 @@ export const simpleGameDefinition: GameDefinition<
     const player = state.players[client.sessionId];
     if (player) {
       player.connected = true;
+      player.lastAcceptedMoveAt = Date.now();
     }
   },
 
@@ -224,6 +245,7 @@ export const simpleGameDefinition: GameDefinition<
     const player = state.players[client.sessionId];
     if (player) {
       player.connected = false;
+      player.lastAcceptedMoveAt = Date.now();
       player.velocity.x = 0;
       player.velocity.z = 0;
     }
@@ -247,45 +269,36 @@ export const simpleGameDefinition: GameDefinition<
       case "steer":
         player.heading = normalizeAngle(action.heading);
         return;
+      case "move": {
+        const now = Date.now();
+        const dtMs = Math.max(now - player.lastAcceptedMoveAt, MIN_MOVE_DT_MS);
+        const dtSeconds = dtMs / 1000;
+        const reportedVelocity = clampSpeed(action.velocity.x, action.velocity.z, MAX_SPEED);
+        const dx = action.position.x - player.position.x;
+        const dz = action.position.z - player.position.z;
+        const distance = Math.hypot(dx, dz);
+        const maxDistance = MAX_SPEED * dtSeconds + MAX_POSITION_TOLERANCE;
+
+        if (distance > maxDistance) {
+          throw new Error(`Movement rejected: exceeded max travel (${distance.toFixed(2)} > ${maxDistance.toFixed(2)})`);
+        }
+
+        player.heading = normalizeAngle(action.heading);
+        player.velocity.x = reportedVelocity.x;
+        player.velocity.z = reportedVelocity.z;
+        player.position.x = clampPosition(action.position.x);
+        player.position.y = clampVerticalPosition(action.position.y);
+        player.position.z = clampPosition(action.position.z);
+        player.lastAcceptedMoveAt = now;
+        return;
+      }
       default:
         throw new Error(`Unsupported action: ${(action as { type: string }).type}`);
     }
   },
 
-  tick(state, { deltaTimeMs }) {
-    const deltaSeconds = deltaTimeMs / 1000;
-    let changed = false;
-
-    Object.values(state.players).forEach((player) => {
-      if (!player.connected) {
-        return;
-      }
-
-      const forceX = Math.cos(player.heading) * MOVEMENT_FORCE;
-      const forceZ = Math.sin(player.heading) * MOVEMENT_FORCE;
-
-      player.velocity.x += forceX * deltaSeconds;
-      player.velocity.z += forceZ * deltaSeconds;
-
-      const dragFactor = Math.max(0, 1 - MOVEMENT_DRAG * deltaSeconds);
-      player.velocity.x *= dragFactor;
-      player.velocity.z *= dragFactor;
-
-      const clampedVelocity = clampSpeed(player.velocity.x, player.velocity.z, MAX_SPEED);
-      player.velocity.x = clampedVelocity.x;
-      player.velocity.z = clampedVelocity.z;
-
-      const nextX = player.position.x + player.velocity.x * deltaSeconds;
-      const nextZ = player.position.z + player.velocity.z * deltaSeconds;
-
-      if (nextX !== player.position.x || nextZ !== player.position.z) {
-        player.position.x = nextX;
-        player.position.z = nextZ;
-        changed = true;
-      }
-    });
-
-    return changed;
+  tick() {
+    return false;
   },
 
   projectView(state, viewerSessionId) {

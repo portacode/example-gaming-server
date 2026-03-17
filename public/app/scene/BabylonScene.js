@@ -32,6 +32,7 @@ const DEFAULT_SNAPSHOT_INTERVAL_MS = 50;
 const OFFSET_SMOOTHING = 0.12;
 const INTERVAL_SMOOTHING = 0.2;
 const JITTER_SMOOTHING = 0.15;
+const MOVEMENT_SEND_INTERVAL_MS = 50;
 const MOVEMENT_FORCE = 18;
 const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
@@ -41,7 +42,6 @@ const PLAYER_COLLIDER_RADIUS = 0.35;
 const PLAYER_COLLIDER_HEIGHT = 1.8;
 const PLAYER_GRAVITY = 28;
 const PLAYER_MAX_FALL_SPEED = 24;
-const PLAYER_POSITION_RECONCILIATION_RATE = 14;
 const CHARACTER_MODEL_URL = "/assets/characters/low_poly_humanoid_robot.glb";
 const WORLD_MODEL_URL = "/assets/world/low-poly_industrial_building.glb";
 const GROUND_DIFFUSE_URL = "/assets/world/textures/asphalt_01_diff_1k.jpg";
@@ -120,9 +120,9 @@ function integrateMovement(snapshot, heading, deltaMs) {
 }
 
 export class BabylonScene {
-  constructor({ canvas, onHeadingChange }) {
+  constructor({ canvas, onMovementChange }) {
     this.canvas = canvas;
-    this.onHeadingChange = onHeadingChange;
+    this.onMovementChange = onMovementChange;
     this.engine = null;
     this.scene = null;
     this.camera = null;
@@ -131,7 +131,9 @@ export class BabylonScene {
     this.selfPosition = null;
     this.selfSessionId = null;
     this.lastHeading = null;
-    this.lastHeadingSentAt = 0;
+    this.lastMovementSentAt = 0;
+    this.lastSentPosition = null;
+    this.lastSentVelocity = null;
     this.skyDome = null;
     this.cameraFocus = null;
     this.cameraFocusPosition = null;
@@ -182,7 +184,7 @@ export class BabylonScene {
     this.engine.runRenderLoop(() => {
       this.updateRenderedPlayers();
       this.updateCameraFraming();
-      this.syncHeadingIntent();
+      this.syncMovementIntent();
       this.scene.render();
     });
 
@@ -224,6 +226,8 @@ export class BabylonScene {
       this.selfSessionId = null;
       this.selfPosition = null;
       this.lastHeading = null;
+      this.lastSentPosition = null;
+      this.lastSentVelocity = null;
       this.cameraFocusPosition = null;
     }
   }
@@ -277,6 +281,7 @@ export class BabylonScene {
         snapshots: [],
         renderedPosition: cloneVector(player.position),
         heading: player.heading,
+        localVelocity: cloneVelocity(player.velocity),
       };
       this.playerStates.set(sessionId, state);
     }
@@ -296,6 +301,10 @@ export class BabylonScene {
     if (!state.renderedPosition) {
       state.renderedPosition = cloneVector(player.position);
     }
+
+    if (!state.localVelocity) {
+      state.localVelocity = cloneVelocity(player.velocity);
+    }
   }
 
   updateRenderedPlayers() {
@@ -314,7 +323,7 @@ export class BabylonScene {
 
       const isSelf = sessionId === this.selfSessionId;
       if (isSelf) {
-        const targetPosition = this.predictSelfPosition(state);
+        const targetPosition = this.integrateSelfCollisionTarget(state, deltaSeconds);
         state.renderedPosition = this.resolveSelfCollisionPosition(
           avatar,
           state,
@@ -371,19 +380,30 @@ export class BabylonScene {
     return extrapolateLinear(latest, extrapolationMs);
   }
 
-  predictSelfPosition(state) {
-    const latest = state.snapshots[state.snapshots.length - 1];
-    if (!latest) {
-      return state.renderedPosition ?? { x: 0, y: 1, z: 0 };
-    }
+  integrateSelfCollisionTarget(state, deltaSeconds) {
+    const currentPosition = state.renderedPosition ?? { x: 0, y: 1, z: 0 };
+    const velocity = state.localVelocity ?? { x: 0, z: 0 };
+    const heading = this.lastHeading ?? state.heading ?? 0;
+    const forceX = Math.cos(heading) * MOVEMENT_FORCE;
+    const forceZ = Math.sin(heading) * MOVEMENT_FORCE;
 
-    const predictionMs = BABYLON.Scalar.Clamp(
-      this.getEstimatedServerTime() - latest.serverTime,
-      0,
-      MAX_EXTRAPOLATION_MS,
-    );
-    const heading = this.lastHeading ?? latest.heading;
-    return integrateMovement(latest, heading, predictionMs);
+    velocity.x += forceX * deltaSeconds;
+    velocity.z += forceZ * deltaSeconds;
+
+    const dragFactor = Math.max(0, 1 - MOVEMENT_DRAG * deltaSeconds);
+    velocity.x *= dragFactor;
+    velocity.z *= dragFactor;
+
+    const clampedVelocity = clampSpeed(velocity.x, velocity.z, MAX_SPEED);
+    velocity.x = clampedVelocity.x;
+    velocity.z = clampedVelocity.z;
+    state.localVelocity = velocity;
+
+    return {
+      x: currentPosition.x + velocity.x * deltaSeconds,
+      y: currentPosition.y,
+      z: currentPosition.z + velocity.z * deltaSeconds,
+    };
   }
 
   blendRenderedPosition(current, target, deltaSeconds) {
@@ -413,28 +433,37 @@ export class BabylonScene {
       0,
       targetPosition.z - currentPosition.z,
     );
-    const horizontalDistance = horizontalDelta.length();
-    const correctionAlpha = 1 - Math.exp(-PLAYER_POSITION_RECONCILIATION_RATE * deltaSeconds);
-
-    if (horizontalDistance > 0.0001) {
-      horizontalDelta.scaleInPlace(correctionAlpha);
-    }
+    const requestedHorizontalDelta = horizontalDelta.clone();
 
     avatar.verticalVelocity = Math.max(
       avatar.verticalVelocity - PLAYER_GRAVITY * deltaSeconds,
       -PLAYER_MAX_FALL_SPEED,
     );
 
+    const previousX = collisionProxy.position.x;
     const previousY = collisionProxy.position.y;
+    const previousZ = collisionProxy.position.z;
     collisionProxy.moveWithCollisions(new BABYLON.Vector3(
-      horizontalDelta.x,
+      requestedHorizontalDelta.x,
       avatar.verticalVelocity * deltaSeconds,
-      horizontalDelta.z,
+      requestedHorizontalDelta.z,
     ));
 
+    const actualHorizontalDelta = new BABYLON.Vector3(
+      collisionProxy.position.x - previousX,
+      0,
+      collisionProxy.position.z - previousZ,
+    );
     const deltaY = collisionProxy.position.y - previousY;
     if (deltaY >= -0.001 && avatar.verticalVelocity < 0) {
       avatar.verticalVelocity = 0;
+    }
+
+    if (deltaSeconds > 0) {
+      state.localVelocity = {
+        x: actualHorizontalDelta.x / deltaSeconds,
+        z: actualHorizontalDelta.z / deltaSeconds,
+      };
     }
 
     return {
@@ -1226,7 +1255,7 @@ export class BabylonScene {
     avatar.root.dispose(false, true);
   }
 
-  syncHeadingIntent() {
+  syncMovementIntent() {
     if (!this.selfPosition || !this.camera) {
       return;
     }
@@ -1237,16 +1266,38 @@ export class BabylonScene {
       this.selfPosition.x - cameraPosition.x,
     );
     const now = performance.now();
+    const state = this.selfSessionId ? this.playerStates.get(this.selfSessionId) : null;
+    const velocity = state?.localVelocity ?? state?.snapshots?.[state.snapshots.length - 1]?.velocity ?? { x: 0, z: 0 };
 
     if (this.lastHeading !== null) {
       const delta = Math.atan2(Math.sin(heading - this.lastHeading), Math.cos(heading - this.lastHeading));
-      if (Math.abs(delta) < 0.04 && now - this.lastHeadingSentAt < 250) {
+      const speedDelta = Math.hypot(
+        velocity.x - (this.lastSentVelocity?.x ?? 0),
+        velocity.z - (this.lastSentVelocity?.z ?? 0),
+      );
+      const positionDelta = Math.hypot(
+        this.selfPosition.x - (this.lastSentPosition?.x ?? this.selfPosition.x),
+        this.selfPosition.z - (this.lastSentPosition?.z ?? this.selfPosition.z),
+      );
+      if (Math.abs(delta) < 0.04
+        && speedDelta < 0.08
+        && positionDelta < 0.08
+        && now - this.lastMovementSentAt < MOVEMENT_SEND_INTERVAL_MS) {
         return;
       }
     }
 
     this.lastHeading = heading;
-    this.lastHeadingSentAt = now;
-    this.onHeadingChange?.(heading);
+    this.lastMovementSentAt = now;
+    this.lastSentVelocity = { x: velocity.x, z: velocity.z };
+    this.lastSentPosition = cloneVector(this.selfPosition);
+    this.onMovementChange?.({
+      heading,
+      velocity: {
+        x: velocity.x,
+        z: velocity.z,
+      },
+      position: cloneVector(this.selfPosition),
+    });
   }
 }
