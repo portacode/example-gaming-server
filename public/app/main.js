@@ -16,6 +16,10 @@ const modalTitle = document.getElementById("modalTitle");
 const modalCopy = document.getElementById("modalCopy");
 const loginFormCard = document.getElementById("loginFormCard");
 const loadingCard = document.getElementById("loadingCard");
+const loadingStatus = document.getElementById("loadingStatus");
+const loadingDetail = document.getElementById("loadingDetail");
+const loadingBarFill = document.getElementById("loadingBarFill");
+const loadingPercent = document.getElementById("loadingPercent");
 const controlsCard = document.getElementById("controlsCard");
 const reconnectCard = document.getElementById("reconnectCard");
 const reconnectStatus = document.getElementById("reconnectStatus");
@@ -64,6 +68,41 @@ function setConnectionState(status) {
 
   if (!connected) {
     setDebugOpen(false);
+  }
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const fractionDigits = value >= 100 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(fractionDigits)} ${units[unitIndex]}`;
+}
+
+function updateLoadingProgress(progress) {
+  if (!progress) {
+    return;
+  }
+
+  const boundedPercent = Math.max(0, Math.min(100, progress.percent ?? 0));
+  loadingBarFill.style.width = `${boundedPercent}%`;
+  loadingPercent.textContent = `${Math.round(boundedPercent)}%`;
+  loadingStatus.textContent = progress.statusText ?? "Preparing the world before the game becomes interactive.";
+
+  if (progress.totalBytes > 0) {
+    loadingDetail.textContent = `${progress.activeLabel} • ${formatBytes(progress.loadedBytes)} / ${formatBytes(progress.totalBytes)}`;
+  } else {
+    loadingDetail.textContent = progress.activeLabel ?? "Downloading assets...";
   }
 }
 
@@ -135,6 +174,7 @@ const sceneApp = new BabylonScene({
       position,
     });
   },
+  onLoadProgress: updateLoadingProgress,
 });
 
 window.__sceneApp = sceneApp;
@@ -154,9 +194,23 @@ const network = new GameNetworkClient({
 });
 
 setBootLoadingState();
+updateLoadingProgress({
+  percent: 0,
+  activeLabel: "Starting downloads...",
+  statusText: "Preparing the world before the game becomes interactive.",
+  loadedBytes: 0,
+  totalBytes: 0,
+});
 
 try {
   await sceneApp.init();
+  updateLoadingProgress({
+    percent: 100,
+    activeLabel: "World ready",
+    statusText: "Assets loaded. Finalizing the world.",
+    loadedBytes: 0,
+    totalBytes: 0,
+  });
 } catch (error) {
   log(`Scene initialization error: ${error}`);
   modalTitle.textContent = "World Load Failed";

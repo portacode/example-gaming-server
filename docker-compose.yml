@@ -3,7 +3,7 @@ version: '3.8'
 services:
   game-server:
     build: .
-    command: sh -c "npm run build && npm start"
+    command: npm start
     ports:
       - "5000:5000"
     environment:

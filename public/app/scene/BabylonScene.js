@@ -51,6 +51,15 @@ const ROTATION_SMOOTHING = 12;
 const WALK_TRIM_START_SECONDS = 1;
 const GROUND_SIZE = 2400;
 const GROUND_TEXTURE_REPEAT = 180;
+const DEFAULT_UNKNOWN_ASSET_WEIGHT = 1024 * 1024;
+const ASSET_METADATA = {
+  characterModel: { label: "Character model", estimatedBytes: 2 * 1024 * 1024 },
+  worldModel: { label: "World model", estimatedBytes: 8 * 1024 * 1024 },
+  groundTexture: { label: "Ground texture", estimatedBytes: 512 * 1024 },
+  "sky:qwantani-afternoon": { label: "Sky preset: Qwantani", estimatedBytes: 1024 * 1024 },
+  "sky:overcast-soil": { label: "Sky preset: Overcast", estimatedBytes: 1024 * 1024 },
+  "sky:rocky-ridge": { label: "Sky preset: Rocky Ridge", estimatedBytes: 1024 * 1024 },
+};
 
 function cloneVector(position) {
   return {
@@ -122,9 +131,10 @@ function integrateMovement(snapshot, heading, deltaMs) {
 }
 
 export class BabylonScene {
-  constructor({ canvas, onMovementChange }) {
+  constructor({ canvas, onMovementChange, onLoadProgress }) {
     this.canvas = canvas;
     this.onMovementChange = onMovementChange;
+    this.onLoadProgress = onLoadProgress;
     this.engine = null;
     this.scene = null;
     this.camera = null;
@@ -171,6 +181,10 @@ export class BabylonScene {
     this.worldSurfaceMeshes = [];
     this.worldBounds = null;
     this.groundDecorRoot = null;
+    this.assetProgress = new Map();
+    this.assetUrls = new Map();
+    this.objectUrls = [];
+    this.lastActiveLoadLabel = "Starting downloads...";
   }
 
   async init() {
@@ -651,36 +665,196 @@ export class BabylonScene {
     ]);
   }
 
+  getAssetMetadata(assetId) {
+    return ASSET_METADATA[assetId] ?? {
+      label: assetId,
+      estimatedBytes: DEFAULT_UNKNOWN_ASSET_WEIGHT,
+    };
+  }
+
+  reportAssetProgress(assetId, update = {}) {
+    const metadata = this.getAssetMetadata(assetId);
+    const previous = this.assetProgress.get(assetId) ?? {
+      id: assetId,
+      label: metadata.label,
+      loaded: 0,
+      total: 0,
+      estimatedBytes: metadata.estimatedBytes,
+      status: "pending",
+    };
+    const next = {
+      ...previous,
+      ...update,
+    };
+
+    if (next.loaded < 0) {
+      next.loaded = 0;
+    }
+    if (next.total < 0) {
+      next.total = 0;
+    }
+    if (next.total > 0 && next.loaded > next.total) {
+      next.loaded = next.total;
+    }
+    if (next.status === "complete") {
+      next.loaded = next.total > 0 ? next.total : Math.max(next.loaded, next.estimatedBytes);
+    }
+
+    this.assetProgress.set(assetId, next);
+
+    if (next.status === "loading" || next.status === "complete") {
+      this.lastActiveLoadLabel = next.label;
+    }
+
+    this.emitLoadProgress();
+  }
+
+  emitLoadProgress() {
+    if (!this.onLoadProgress) {
+      return;
+    }
+
+    const assets = Array.from(this.assetProgress.values());
+    if (!assets.length) {
+      this.onLoadProgress({
+        percent: 0,
+        activeLabel: this.lastActiveLoadLabel,
+        statusText: "Preparing the world before the game becomes interactive.",
+        loadedBytes: 0,
+        totalBytes: 0,
+      });
+      return;
+    }
+
+    let weightedLoaded = 0;
+    let weightedTotal = 0;
+    let totalKnownBytes = 0;
+    let loadedKnownBytes = 0;
+    let completeCount = 0;
+    let pendingCount = 0;
+
+    assets.forEach((asset) => {
+      const weight = asset.total > 0 ? asset.total : asset.estimatedBytes;
+      const loaded = asset.total > 0
+        ? Math.min(asset.loaded, asset.total)
+        : asset.status === "complete"
+          ? weight
+          : asset.loaded > 0
+            ? Math.min(asset.loaded, weight)
+            : 0;
+
+      weightedLoaded += loaded;
+      weightedTotal += weight;
+
+      if (asset.total > 0) {
+        totalKnownBytes += asset.total;
+        loadedKnownBytes += Math.min(asset.loaded, asset.total);
+      }
+
+      if (asset.status === "complete") {
+        completeCount += 1;
+      } else {
+        pendingCount += 1;
+      }
+    });
+
+    const activeAsset = assets.find((asset) => asset.status === "loading");
+    const activeLabel = activeAsset?.label ?? this.lastActiveLoadLabel;
+    const percent = weightedTotal > 0 ? (weightedLoaded / weightedTotal) * 100 : 0;
+    const statusText = pendingCount > 0
+      ? `Downloading assets (${completeCount}/${assets.length})`
+      : "Assets downloaded. Building the world...";
+
+    this.onLoadProgress({
+      percent,
+      activeLabel,
+      statusText,
+      loadedBytes: loadedKnownBytes,
+      totalBytes: totalKnownBytes,
+    });
+  }
+
   async preloadAllSkyPresets() {
     await Promise.all(Object.keys(SKY_PRESETS).map((skyKey) => this.preloadSkyPreset(skyKey)));
   }
 
   async preloadSkyPreset(skyKey) {
     const preset = SKY_PRESETS[skyKey] ?? SKY_PRESETS[WORLD_SKY_PRESET];
-
-    await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error(`Failed to preload sky asset: ${preset.file}`));
-      image.src = preset.file;
-    });
+    await this.fetchAssetAsObjectUrl(`sky:${skyKey}`, preset.file);
   }
 
   async preloadGroundTextures() {
-    await this.preloadImageTexture(GROUND_DIFFUSE_URL);
+    await this.fetchAssetAsObjectUrl("groundTexture", GROUND_DIFFUSE_URL);
   }
 
-  async preloadImageTexture(url) {
-    await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error(`Failed to preload texture asset: ${url}`));
-      image.src = url;
+  getAssetUrl(assetId, fallbackUrl) {
+    return this.assetUrls.get(assetId) ?? fallbackUrl;
+  }
+
+  async fetchAssetAsObjectUrl(assetId, url) {
+    if (this.assetUrls.has(assetId)) {
+      return this.assetUrls.get(assetId);
+    }
+
+    this.reportAssetProgress(assetId, { status: "loading", loaded: 0, total: 0 });
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      this.reportAssetProgress(assetId, { status: "error" });
+      throw new Error(`Failed to preload asset: ${url} (${response.status})`);
+    }
+
+    const total = Number(response.headers.get("content-length")) || 0;
+    const reader = response.body?.getReader();
+
+    if (!reader) {
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      this.assetUrls.set(assetId, objectUrl);
+      this.objectUrls.push(objectUrl);
+      this.reportAssetProgress(assetId, {
+        status: "complete",
+        loaded: blob.size,
+        total: total || blob.size,
+      });
+      return objectUrl;
+    }
+
+    const chunks = [];
+    let loaded = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (value) {
+        chunks.push(value);
+        loaded += value.byteLength;
+        this.reportAssetProgress(assetId, {
+          status: "loading",
+          loaded,
+          total,
+        });
+      }
+    }
+
+    const blob = new Blob(chunks);
+    const objectUrl = URL.createObjectURL(blob);
+    this.assetUrls.set(assetId, objectUrl);
+    this.objectUrls.push(objectUrl);
+    this.reportAssetProgress(assetId, {
+      status: "complete",
+      loaded,
+      total: total || loaded,
     });
+    return objectUrl;
   }
 
   applySkyPreset(skyKey) {
     const preset = SKY_PRESETS[skyKey] ?? SKY_PRESETS[WORLD_SKY_PRESET];
+    const skyUrl = this.getAssetUrl(`sky:${skyKey}`, preset.file);
 
     if (this.skyDome) {
       this.skyDome.dispose();
@@ -688,7 +862,7 @@ export class BabylonScene {
 
     this.skyDome = new BABYLON.PhotoDome(
       "sky-dome",
-      preset.file,
+      skyUrl,
       {
         resolution: 32,
         size: 1200,
@@ -704,15 +878,25 @@ export class BabylonScene {
       return this.characterLoadPromise;
     }
 
+    this.reportAssetProgress("characterModel", { status: "loading", loaded: 0, total: 0 });
     this.characterLoadPromise = BABYLON.SceneLoader.LoadAssetContainerAsync(
       CHARACTER_MODEL_URL,
       undefined,
       this.scene,
+      (event) => {
+        this.reportAssetProgress("characterModel", {
+          status: "loading",
+          loaded: event.loaded ?? 0,
+          total: event.lengthComputable ? event.total ?? 0 : 0,
+        });
+      },
     ).then((container) => {
       this.characterAssetContainer = container;
+      this.reportAssetProgress("characterModel", { status: "complete" });
     }).catch((error) => {
       console.error("Failed to load character model", error);
       this.characterAssetContainer = null;
+      this.reportAssetProgress("characterModel", { status: "error" });
     }).finally(() => {
       this.characterLoadPromise = null;
     });
@@ -725,15 +909,25 @@ export class BabylonScene {
       return this.worldLoadPromise;
     }
 
+    this.reportAssetProgress("worldModel", { status: "loading", loaded: 0, total: 0 });
     this.worldLoadPromise = BABYLON.SceneLoader.LoadAssetContainerAsync(
       WORLD_MODEL_URL,
       undefined,
       this.scene,
+      (event) => {
+        this.reportAssetProgress("worldModel", {
+          status: "loading",
+          loaded: event.loaded ?? 0,
+          total: event.lengthComputable ? event.total ?? 0 : 0,
+        });
+      },
     ).then((container) => {
       this.worldAssetContainer = container;
+      this.reportAssetProgress("worldModel", { status: "complete" });
     }).catch((error) => {
       console.error("Failed to load world model", error);
       this.worldAssetContainer = null;
+      this.reportAssetProgress("worldModel", { status: "error" });
       throw error;
     }).finally(() => {
       this.worldLoadPromise = null;
@@ -829,7 +1023,13 @@ export class BabylonScene {
     ground.checkCollisions = true;
 
     const material = new BABYLON.StandardMaterial("ground-texture-material", this.scene);
-    const diffuseTexture = new BABYLON.Texture(GROUND_DIFFUSE_URL, this.scene, false, false, BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+    const diffuseTexture = new BABYLON.Texture(
+      this.getAssetUrl("groundTexture", GROUND_DIFFUSE_URL),
+      this.scene,
+      false,
+      false,
+      BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
+    );
     diffuseTexture.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
     diffuseTexture.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
     diffuseTexture.uScale = GROUND_TEXTURE_REPEAT;

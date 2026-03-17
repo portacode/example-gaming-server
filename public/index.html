@@ -170,16 +170,23 @@
     }
     .loadingBar span {
       display: block;
-      width: 38%;
+      width: 0%;
       height: 100%;
       border-radius: inherit;
       background: linear-gradient(90deg, #c95d2a 0%, #e59f55 100%);
-      animation: loading-slide 1.1s ease-in-out infinite;
+      transition: width 140ms ease;
     }
-    @keyframes loading-slide {
-      0% { transform: translateX(-110%); }
-      55% { transform: translateX(170%); }
-      100% { transform: translateX(170%); }
+    .loadingMeta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    #loadingPercent {
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
     }
     #debugPanel {
       position: absolute;
@@ -276,9 +283,13 @@
 
         <section id="loadingCard" class="loadingCard stack">
           <strong>Loading Assets</strong>
-          <p class="heroCopy">Preparing the world before the game becomes interactive.</p>
+          <p id="loadingStatus" class="heroCopy">Preparing the world before the game becomes interactive.</p>
           <div class="loadingBar" aria-hidden="true">
-            <span></span>
+            <span id="loadingBarFill"></span>
+          </div>
+          <div class="loadingMeta">
+            <span id="loadingDetail">Starting downloads...</span>
+            <strong id="loadingPercent">0%</strong>
           </div>
         </section>
 
