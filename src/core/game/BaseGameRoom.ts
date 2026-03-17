@@ -102,7 +102,9 @@ export abstract class BaseGameRoom<
     this.syncState();
 
     try {
-      await this.allowReconnection(client, this.getReconnectWindowSeconds());
+      const reconnectedClient = await this.allowReconnection(client, this.getReconnectWindowSeconds());
+      this.definition.onPlayerReconnect?.(this.internalState, this.createPlayerContext(reconnectedClient));
+      this.syncState();
     } catch {
       this.definition.onPlayerLeave?.(this.internalState, context);
       this.syncState();
