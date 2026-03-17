@@ -110,8 +110,8 @@ function getConnectedPlayers(state: SimpleGameState) {
   return Object.values(state.players).filter((player) => player.connected).length;
 }
 
-function clampPosition(value: number) {
-  return Math.max(-14, Math.min(14, value));
+function sanitizeHorizontalPosition(value: number, fallback = 0) {
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function clampVerticalPosition(value: number) {
@@ -286,9 +286,9 @@ export const simpleGameDefinition: GameDefinition<
         player.heading = normalizeAngle(action.heading);
         player.velocity.x = reportedVelocity.x;
         player.velocity.z = reportedVelocity.z;
-        player.position.x = clampPosition(action.position.x);
+        player.position.x = sanitizeHorizontalPosition(action.position.x, player.position.x);
         player.position.y = clampVerticalPosition(action.position.y);
-        player.position.z = clampPosition(action.position.z);
+        player.position.z = sanitizeHorizontalPosition(action.position.z, player.position.z);
         player.lastAcceptedMoveAt = now;
         return;
       }
