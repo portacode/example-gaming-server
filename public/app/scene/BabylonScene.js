@@ -348,10 +348,9 @@ export class BabylonScene {
         );
       } else {
         const targetPosition = this.interpolateRemotePosition(state, renderTime);
-        const groundedPosition = this.projectPositionToWorldSurface(targetPosition);
         state.renderedPosition = this.blendRenderedPosition(
-          state.renderedPosition ?? cloneVector(groundedPosition),
-          groundedPosition,
+          state.renderedPosition ?? cloneVector(targetPosition),
+          targetPosition,
           deltaSeconds,
         );
       }

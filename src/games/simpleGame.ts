@@ -118,6 +118,10 @@ function clampVerticalPosition(value: number) {
   return Math.max(0, Math.min(16, value));
 }
 
+function sanitizeVerticalPosition(value: number, fallback = 0) {
+  return Number.isFinite(value) ? clampVerticalPosition(value) : fallback;
+}
+
 function createSpawnPosition(index: number) {
   const radius = 6;
   const angle = (index / Math.max(1, PLAYERS_PER_GAME)) * Math.PI * 2;
@@ -131,10 +135,12 @@ function createSpawnPosition(index: number) {
 
 function canSeePlayer(viewer: SimplePlayer, target: SimplePlayer) {
   const dx = viewer.position.x - target.position.x;
+  const dy = viewer.position.y - target.position.y;
   const dz = viewer.position.z - target.position.z;
   const distanceSquared = dx * dx + dz * dz;
 
-  return distanceSquared <= VISIBILITY_RADIUS * VISIBILITY_RADIUS;
+  return distanceSquared <= VISIBILITY_RADIUS * VISIBILITY_RADIUS
+    && Math.abs(dy) <= MAX_VISIBLE_VERTICAL_DELTA;
 }
 
 function normalizeAngle(angle: number) {
@@ -157,7 +163,10 @@ function clampSpeed(x: number, z: number, maxSpeed: number) {
 
 const MAX_SPEED = 7.5;
 const VISIBILITY_RADIUS = 100;
+const MAX_VISIBLE_VERTICAL_DELTA = 3.5;
 const MAX_POSITION_TOLERANCE = 0.9;
+const MAX_VERTICAL_SPEED = 10;
+const MAX_VERTICAL_POSITION_TOLERANCE = 0.75;
 const MIN_MOVE_DT_MS = 16;
 
 function syncPlayerPresenceMap(roomPlayers: MapSchema<PlayerPresenceState>, state: SimpleGameState) {
@@ -274,20 +283,27 @@ export const simpleGameDefinition: GameDefinition<
         const dtMs = Math.max(now - player.lastAcceptedMoveAt, MIN_MOVE_DT_MS);
         const dtSeconds = dtMs / 1000;
         const reportedVelocity = clampSpeed(action.velocity.x, action.velocity.z, MAX_SPEED);
+        const nextY = sanitizeVerticalPosition(action.position.y, player.position.y);
         const dx = action.position.x - player.position.x;
+        const dy = nextY - player.position.y;
         const dz = action.position.z - player.position.z;
         const distance = Math.hypot(dx, dz);
         const maxDistance = MAX_SPEED * dtSeconds + MAX_POSITION_TOLERANCE;
+        const maxVerticalDistance = MAX_VERTICAL_SPEED * dtSeconds + MAX_VERTICAL_POSITION_TOLERANCE;
 
         if (distance > maxDistance) {
           throw new Error(`Movement rejected: exceeded max travel (${distance.toFixed(2)} > ${maxDistance.toFixed(2)})`);
+        }
+
+        if (Math.abs(dy) > maxVerticalDistance) {
+          throw new Error(`Movement rejected: exceeded max vertical travel (${Math.abs(dy).toFixed(2)} > ${maxVerticalDistance.toFixed(2)})`);
         }
 
         player.heading = normalizeAngle(action.heading);
         player.velocity.x = reportedVelocity.x;
         player.velocity.z = reportedVelocity.z;
         player.position.x = sanitizeHorizontalPosition(action.position.x, player.position.x);
-        player.position.y = clampVerticalPosition(action.position.y);
+        player.position.y = nextY;
         player.position.z = sanitizeHorizontalPosition(action.position.z, player.position.z);
         player.lastAcceptedMoveAt = now;
         return;
