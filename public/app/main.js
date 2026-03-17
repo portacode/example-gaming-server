@@ -1,8 +1,8 @@
 import { GameNetworkClient } from "./network/GameNetworkClient.js";
 import { BabylonScene } from "./scene/BabylonScene.js";
 
+const loginForm = document.getElementById("loginForm");
 const connectButton = document.getElementById("connectBtn");
-const pingButton = document.getElementById("pingBtn");
 const usernameInput = document.getElementById("usernameInput");
 const roomStatus = document.getElementById("roomStatus");
 const playerStatus = document.getElementById("playerStatus");
@@ -36,7 +36,6 @@ function setConnectionState(status) {
   const showModal = state !== "connected";
 
   connectButton.disabled = connecting || reconnecting || loading;
-  pingButton.disabled = !connected;
   loginModal.dataset.visible = String(showModal);
   loginModal.dataset.mode = state;
   logoutButton.hidden = !connected;
@@ -189,7 +188,8 @@ toggleCollidersButton.addEventListener("click", () => {
   logWorldColliderStats();
 });
 
-connectButton.addEventListener("click", async () => {
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
   const username = usernameInput.value.trim() || `Player_${Math.random().toString(36).slice(2, 7)}`;
   try {
     await network.connect(username);
@@ -197,9 +197,4 @@ connectButton.addEventListener("click", async () => {
     log(`Connection error: ${error}`);
     setConnectionState({ state: "disconnected", reason: "connect_failed" });
   }
-});
-
-pingButton.addEventListener("click", () => {
-  network.sendAction({ type: "ping" });
-  log("Sent action: ping");
 });

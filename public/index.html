@@ -260,20 +260,21 @@
       <div class="modalCard stack">
         <div class="stack">
           <div class="eyebrow">Browser Multiplayer Template</div>
-          <h1 id="modalTitle">Enter The World</h1>
-          <p id="modalCopy" class="heroCopy">Connect to a Colyseus room, render the scene in Babylon.js, and keep the debug tools tucked away until you need them.</p>
+          <h1 id="modalTitle">Loading World</h1>
+          <p id="modalCopy" class="heroCopy">Preparing the environment and background assets before you enter the match.</p>
         </div>
 
-        <section id="loginFormCard" class="card stack">
-          <label for="usernameInput">Player Name</label>
-          <input type="text" id="usernameInput" placeholder="Enter username">
-          <div class="buttonRow">
-            <button id="connectBtn">Join Game</button>
-            <button id="pingBtn" disabled>Send Ping</button>
-          </div>
+        <section id="loginFormCard" class="card stack" hidden>
+          <form id="loginForm" class="stack">
+            <label for="usernameInput">Player Name</label>
+            <input type="text" id="usernameInput" placeholder="Enter username">
+            <div class="buttonRow">
+              <button id="connectBtn" type="submit">Join Game</button>
+            </div>
+          </form>
         </section>
 
-        <section id="loadingCard" class="loadingCard stack" hidden>
+        <section id="loadingCard" class="loadingCard stack">
           <strong>Loading Assets</strong>
           <p class="heroCopy">Preparing the world before the game becomes interactive.</p>
           <div class="loadingBar" aria-hidden="true">
@@ -281,7 +282,7 @@
           </div>
         </section>
 
-        <section id="controlsCard" class="card stack">
+        <section id="controlsCard" class="card stack" hidden>
           <strong>Controls</strong>
           <p>Rotate the camera to steer. The server continuously pushes your player away from the camera with acceleration and drag, so changing the camera angle changes your travel direction.</p>
         </section>

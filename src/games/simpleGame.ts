@@ -2,7 +2,7 @@ import { MapSchema, type } from "@colyseus/schema";
 import { GameDefinition } from "../core/game/types";
 import { BaseRoomState, PlayerPresenceState } from "../schema/BaseRoomState";
 
-export const PLAYERS_PER_GAME = 2;
+export const PLAYERS_PER_GAME = 4;
 
 export interface SimpleJoinOptions {
   username?: string;
