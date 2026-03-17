@@ -14,6 +14,13 @@ const SKY_PRESETS = {
 };
 
 export const WORLD_SKY_PRESET = "overcast-soil";
+const CAMERA_BETA_MIN = 0.62;
+const CAMERA_BETA_MAX = 1.85;
+const CAMERA_TRANSITION_BETA = 1.02;
+const CAMERA_RADIUS_NEAR = 2.4;
+const CAMERA_RADIUS_FAR = 8.5;
+const CAMERA_TARGET_Y_NEAR = 1.48;
+const CAMERA_TARGET_Y_FAR = 0.92;
 
 export class BabylonScene {
   constructor({ canvas, onHeadingChange }) {
@@ -24,9 +31,11 @@ export class BabylonScene {
     this.camera = null;
     this.playerMeshes = new Map();
     this.selfPosition = null;
+    this.selfSessionId = null;
     this.lastHeading = null;
     this.lastHeadingSentAt = 0;
     this.skyDome = null;
+    this.cameraFocus = null;
   }
 
   async init() {
@@ -38,6 +47,7 @@ export class BabylonScene {
     await this.createEnvironment();
 
     this.engine.runRenderLoop(() => {
+      this.updateCameraFraming();
       this.syncHeadingIntent();
       this.scene.render();
     });
@@ -72,13 +82,15 @@ export class BabylonScene {
     });
 
     if (view.self && this.camera) {
+      this.selfSessionId = view.self.sessionId;
       this.selfPosition = {
         x: view.self.position.x,
         y: view.self.position.y,
         z: view.self.position.z,
       };
-      this.camera.setTarget(new BABYLON.Vector3(view.self.position.x, 0.5, view.self.position.z));
+      this.updateCameraFraming();
     } else {
+      this.selfSessionId = null;
       this.selfPosition = null;
       this.lastHeading = null;
     }
@@ -94,14 +106,22 @@ export class BabylonScene {
     this.camera = new BABYLON.ArcRotateCamera(
       "camera",
       -Math.PI / 2,
-      1.1,
-      24,
+      1.18,
+      CAMERA_RADIUS_FAR,
       new BABYLON.Vector3(0, 0, 0),
       this.scene,
     );
     this.camera.attachControl(this.canvas, true);
-    this.camera.lowerRadiusLimit = 10;
-    this.camera.upperRadiusLimit = 32;
+    this.cameraFocus = new BABYLON.TransformNode("camera-focus", this.scene);
+    this.camera.lockedTarget = this.cameraFocus;
+    this.camera.lowerBetaLimit = CAMERA_BETA_MIN;
+    this.camera.upperBetaLimit = CAMERA_BETA_MAX;
+    this.camera.lowerRadiusLimit = CAMERA_RADIUS_NEAR;
+    this.camera.upperRadiusLimit = 16;
+    this.camera.wheelDeltaPercentage = 0.02;
+    this.camera.panningSensibility = 0;
+    this.camera.inertia = 0.85;
+    this.camera.radius = CAMERA_RADIUS_FAR;
 
     await this.preloadSkyPreset(WORLD_SKY_PRESET);
     this.applySkyPreset(WORLD_SKY_PRESET);
@@ -154,6 +174,44 @@ export class BabylonScene {
       crate.material = material;
       new BABYLON.PhysicsAggregate(crate, BABYLON.PhysicsShapeType.BOX, { mass: 1, restitution: 0.2 }, this.scene);
     }
+  }
+
+  updateCameraFraming() {
+    if (!this.camera || !this.cameraFocus) {
+      return;
+    }
+
+    const trackedPosition = this.getTrackedPlayerPosition();
+    if (!trackedPosition) {
+      return;
+    }
+
+    const transitionFactor = BABYLON.Scalar.Clamp(
+      (this.camera.beta - CAMERA_TRANSITION_BETA) / (CAMERA_BETA_MAX - CAMERA_TRANSITION_BETA),
+      0,
+      1,
+    );
+    const easedTransition = transitionFactor * transitionFactor * (3 - 2 * transitionFactor);
+    const targetY = BABYLON.Scalar.Lerp(CAMERA_TARGET_Y_FAR, CAMERA_TARGET_Y_NEAR, easedTransition);
+    const desiredRadius = BABYLON.Scalar.Lerp(CAMERA_RADIUS_FAR, CAMERA_RADIUS_NEAR, easedTransition);
+
+    this.camera.radius = desiredRadius;
+    this.cameraFocus.position.set(
+      trackedPosition.x,
+      trackedPosition.y + targetY,
+      trackedPosition.z,
+    );
+  }
+
+  getTrackedPlayerPosition() {
+    if (this.selfSessionId) {
+      const selfMesh = this.playerMeshes.get(this.selfSessionId);
+      if (selfMesh) {
+        return selfMesh.position;
+      }
+    }
+
+    return this.selfPosition;
   }
 
   async preloadSkyPreset(skyKey) {
