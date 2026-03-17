@@ -15,6 +15,7 @@ const logoutButton = document.getElementById("logoutBtn");
 const modalTitle = document.getElementById("modalTitle");
 const modalCopy = document.getElementById("modalCopy");
 const loginFormCard = document.getElementById("loginFormCard");
+const loadingCard = document.getElementById("loadingCard");
 const controlsCard = document.getElementById("controlsCard");
 const reconnectCard = document.getElementById("reconnectCard");
 const reconnectStatus = document.getElementById("reconnectStatus");
@@ -30,19 +31,24 @@ function setConnectionState(status) {
   const connected = state === "connected";
   const reconnecting = state === "reconnecting";
   const connecting = state === "connecting";
+  const loading = state === "loading";
   const showModal = state !== "connected";
 
-  connectButton.disabled = connecting || reconnecting;
+  connectButton.disabled = connecting || reconnecting || loading;
   pingButton.disabled = !connected;
   loginModal.dataset.visible = String(showModal);
   loginModal.dataset.mode = state;
   logoutButton.hidden = !connected;
   debugToggle.hidden = !connected;
-  loginFormCard.hidden = reconnecting;
-  controlsCard.hidden = reconnecting;
+  loadingCard.hidden = !loading;
+  loginFormCard.hidden = reconnecting || loading;
+  controlsCard.hidden = reconnecting || loading;
   reconnectCard.hidden = !reconnecting;
 
-  if (state === "connecting") {
+  if (loading) {
+    modalTitle.textContent = "Loading World";
+    modalCopy.textContent = "Preparing the environment and background assets before you enter the match.";
+  } else if (state === "connecting") {
     modalTitle.textContent = "Joining Match";
     modalCopy.textContent = "Connecting to the server and reserving your seat.";
   } else if (state === "reconnecting") {
@@ -67,6 +73,10 @@ function setDebugOpen(open) {
   debugToggle.setAttribute("aria-expanded", String(open));
 }
 
+function setBootLoadingState() {
+  setConnectionState({ state: "loading" });
+}
+
 const sceneApp = new BabylonScene({
   canvas,
   onHeadingChange: (heading) => {
@@ -88,7 +98,17 @@ const network = new GameNetworkClient({
   onConnectionChange: setConnectionState,
 });
 
-await sceneApp.init();
+setBootLoadingState();
+
+try {
+  await sceneApp.init();
+} catch (error) {
+  log(`Scene initialization error: ${error}`);
+  modalTitle.textContent = "World Load Failed";
+  modalCopy.textContent = "The environment could not be prepared. Refresh and try again.";
+  throw error;
+}
+
 setConnectionState({ state: "disconnected" });
 setDebugOpen(false);
 

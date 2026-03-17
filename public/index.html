@@ -150,6 +150,37 @@
     .buttonRow button {
       flex: 1;
     }
+    .loadingCard[hidden],
+    .card[hidden] {
+      display: none !important;
+    }
+    .loadingCard {
+      padding: 22px 20px;
+      border-radius: 18px;
+      border: 1px solid rgba(43, 58, 66, 0.1);
+      background: rgba(255, 251, 245, 0.78);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    }
+    .loadingBar {
+      width: 100%;
+      height: 12px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(43, 58, 66, 0.1);
+    }
+    .loadingBar span {
+      display: block;
+      width: 38%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #c95d2a 0%, #e59f55 100%);
+      animation: loading-slide 1.1s ease-in-out infinite;
+    }
+    @keyframes loading-slide {
+      0% { transform: translateX(-110%); }
+      55% { transform: translateX(170%); }
+      100% { transform: translateX(170%); }
+    }
     #debugPanel {
       position: absolute;
       left: 16px;
@@ -242,6 +273,14 @@
           </div>
         </section>
 
+        <section id="loadingCard" class="loadingCard stack" hidden>
+          <strong>Loading Assets</strong>
+          <p class="heroCopy">Preparing the world before the game becomes interactive.</p>
+          <div class="loadingBar" aria-hidden="true">
+            <span></span>
+          </div>
+        </section>
+
         <section id="controlsCard" class="card stack">
           <strong>Controls</strong>
           <p>Rotate the camera to steer. The server continuously pushes your player away from the camera with acceleration and drag, so changing the camera angle changes your travel direction.</p>
@@ -266,6 +305,7 @@
   </main>
 
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
   <script src="https://cdn.babylonjs.com/havok/HavokPhysics_umd.js"></script>
   <script src="https://unpkg.com/colyseus.js@0.15.14/dist/colyseus.js"></script>
   <script type="module" src="/app/main.js"></script>

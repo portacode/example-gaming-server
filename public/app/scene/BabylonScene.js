@@ -1,3 +1,20 @@
+const SKY_PRESETS = {
+  "qwantani-afternoon": { // Very plain blue sky with bright sun
+    label: "Qwantani",
+    file: "/assets/world/sky/optimized/qwantani-afternoon.jpg",
+  },
+  "overcast-soil": { // Looks like the sky when its about to rain
+    label: "Overcast",
+    file: "/assets/world/sky/optimized/overcast-soil.jpg",
+  },
+  "rocky-ridge": { // Blue sky with little clouds and a yello sun rising on the horizon
+    label: "Rocky Ridge",
+    file: "/assets/world/sky/optimized/rocky-ridge.jpg",
+  },
+};
+
+export const WORLD_SKY_PRESET = "overcast-soil";
+
 export class BabylonScene {
   constructor({ canvas, onHeadingChange }) {
     this.canvas = canvas;
@@ -9,6 +26,7 @@ export class BabylonScene {
     this.selfPosition = null;
     this.lastHeading = null;
     this.lastHeadingSentAt = 0;
+    this.skyDome = null;
   }
 
   async init() {
@@ -17,7 +35,7 @@ export class BabylonScene {
     this.scene.clearColor = new BABYLON.Color4(0.93, 0.97, 1, 1);
 
     await this.enablePhysics();
-    this.createEnvironment();
+    await this.createEnvironment();
 
     this.engine.runRenderLoop(() => {
       this.syncHeadingIntent();
@@ -72,7 +90,7 @@ export class BabylonScene {
     this.scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), plugin);
   }
 
-  createEnvironment() {
+  async createEnvironment() {
     this.camera = new BABYLON.ArcRotateCamera(
       "camera",
       -Math.PI / 2,
@@ -85,12 +103,15 @@ export class BabylonScene {
     this.camera.lowerRadiusLimit = 10;
     this.camera.upperRadiusLimit = 32;
 
-    const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), this.scene);
-    hemi.intensity = 0.85;
+    await this.preloadSkyPreset(WORLD_SKY_PRESET);
+    this.applySkyPreset(WORLD_SKY_PRESET);
 
-    const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-0.6, -1, -0.4), this.scene);
-    sun.position = new BABYLON.Vector3(8, 18, 8);
-    sun.intensity = 1.2;
+    const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), this.scene);
+    hemi.intensity = 0.88;
+
+    const sun = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-0.55, -1, -0.25), this.scene);
+    sun.position = new BABYLON.Vector3(12, 20, 8);
+    sun.intensity = 1.35;
 
     const shadowGenerator = new BABYLON.ShadowGenerator(1024, sun);
     shadowGenerator.useBlurExponentialShadowMap = true;
@@ -99,10 +120,19 @@ export class BabylonScene {
     const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 36, height: 36 }, this.scene);
     ground.receiveShadows = true;
     const groundMaterial = new BABYLON.StandardMaterial("ground-material", this.scene);
-    groundMaterial.diffuseColor = new BABYLON.Color3(0.78, 0.83, 0.74);
-    groundMaterial.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+    groundMaterial.diffuseColor = new BABYLON.Color3(0.73, 0.79, 0.69);
+    groundMaterial.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04);
     ground.material = groundMaterial;
     new BABYLON.PhysicsAggregate(ground, BABYLON.PhysicsShapeType.BOX, { mass: 0, restitution: 0.1 }, this.scene);
+
+    const groundDetail = BABYLON.MeshBuilder.CreateGround("ground-detail", { width: 35.4, height: 35.4 }, this.scene);
+    groundDetail.position.y = 0.02;
+    groundDetail.receiveShadows = true;
+    const groundDetailMaterial = new BABYLON.StandardMaterial("ground-detail-material", this.scene);
+    groundDetailMaterial.diffuseColor = new BABYLON.Color3(0.47, 0.58, 0.39);
+    groundDetailMaterial.specularColor = new BABYLON.Color3(0.02, 0.02, 0.02);
+    groundDetailMaterial.alpha = 0.24;
+    groundDetail.material = groundDetailMaterial;
 
     const platform = BABYLON.MeshBuilder.CreateBox("platform", { width: 8, height: 1, depth: 8 }, this.scene);
     platform.position.y = 0.5;
@@ -124,6 +154,37 @@ export class BabylonScene {
       crate.material = material;
       new BABYLON.PhysicsAggregate(crate, BABYLON.PhysicsShapeType.BOX, { mass: 1, restitution: 0.2 }, this.scene);
     }
+  }
+
+  async preloadSkyPreset(skyKey) {
+    const preset = SKY_PRESETS[skyKey] ?? SKY_PRESETS[WORLD_SKY_PRESET];
+
+    await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error(`Failed to preload sky asset: ${preset.file}`));
+      image.src = preset.file;
+    });
+  }
+
+  applySkyPreset(skyKey) {
+    const preset = SKY_PRESETS[skyKey] ?? SKY_PRESETS[WORLD_SKY_PRESET];
+
+    if (this.skyDome) {
+      this.skyDome.dispose();
+    }
+
+    this.skyDome = new BABYLON.PhotoDome(
+      "sky-dome",
+      preset.file,
+      {
+        resolution: 32,
+        size: 1200,
+      },
+      this.scene,
+    );
+
+    this.scene.clearColor = new BABYLON.Color4(0.72, 0.81, 0.92, 1);
   }
 
   createPlayerMesh(isSelf) {
