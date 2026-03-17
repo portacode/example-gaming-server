@@ -22,6 +22,8 @@ const CAMERA_RADIUS_NEAR = 2.4;
 const CAMERA_RADIUS_FAR = 8.5;
 const CAMERA_TARGET_Y_NEAR = 1.48;
 const CAMERA_TARGET_Y_FAR = 0.92;
+const CAMERA_RADIUS_SMOOTHING = 12;
+const CAMERA_OCCLUSION_PADDING = 0.45;
 const MAX_EXTRAPOLATION_MS = 180;
 const SNAP_DISTANCE = 2.5;
 const POSITION_CORRECTION_RATE = 9;
@@ -582,11 +584,57 @@ export class BabylonScene {
       this.cameraFocusPosition = lerpPosition(this.cameraFocusPosition, desiredFocus, smoothing);
     }
 
-    this.camera.radius = desiredRadius;
     this.cameraFocus.position.set(
       this.cameraFocusPosition.x,
       this.cameraFocusPosition.y,
       this.cameraFocusPosition.z,
+    );
+
+    const occlusionAdjustedRadius = this.resolveCameraRadiusForOcclusion(
+      new BABYLON.Vector3(
+        this.cameraFocusPosition.x,
+        this.cameraFocusPosition.y,
+        this.cameraFocusPosition.z,
+      ),
+      desiredRadius,
+    );
+    const radiusSmoothing = 1 - Math.exp(-CAMERA_RADIUS_SMOOTHING * deltaSeconds);
+    this.camera.radius = BABYLON.Scalar.Lerp(this.camera.radius, occlusionAdjustedRadius, radiusSmoothing);
+  }
+
+  resolveCameraRadiusForOcclusion(focus, desiredRadius) {
+    if (!this.worldMeshes.length) {
+      return desiredRadius;
+    }
+
+    const desiredCameraPosition = this.getArcCameraPositionForRadius(focus, desiredRadius);
+    const offset = desiredCameraPosition.subtract(focus);
+    const distance = offset.length();
+    if (distance <= 0.0001) {
+      return desiredRadius;
+    }
+
+    const direction = offset.scale(1 / distance);
+    const ray = new BABYLON.Ray(focus, direction, distance);
+    const hit = this.scene.pickWithRay(ray, (mesh) => this.worldMeshes.includes(mesh), false);
+
+    if (!hit?.hit || hit.distance === undefined || hit.distance === null) {
+      return desiredRadius;
+    }
+
+    return BABYLON.Scalar.Clamp(
+      hit.distance - CAMERA_OCCLUSION_PADDING,
+      this.camera.lowerRadiusLimit ?? CAMERA_RADIUS_NEAR,
+      desiredRadius,
+    );
+  }
+
+  getArcCameraPositionForRadius(target, radius) {
+    const sinBeta = Math.sin(this.camera.beta);
+    return new BABYLON.Vector3(
+      target.x + radius * Math.cos(this.camera.alpha) * sinBeta,
+      target.y + radius * Math.cos(this.camera.beta),
+      target.z + radius * Math.sin(this.camera.alpha) * sinBeta,
     );
   }
 
