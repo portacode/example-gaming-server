@@ -21,6 +21,93 @@ const CAMERA_RADIUS_NEAR = 2.4;
 const CAMERA_RADIUS_FAR = 8.5;
 const CAMERA_TARGET_Y_NEAR = 1.48;
 const CAMERA_TARGET_Y_FAR = 0.92;
+const MAX_EXTRAPOLATION_MS = 180;
+const SNAP_DISTANCE = 2.5;
+const POSITION_CORRECTION_RATE = 9;
+const CAMERA_FOCUS_SMOOTHING = 10;
+const MIN_INTERPOLATION_DELAY_MS = 35;
+const MAX_INTERPOLATION_DELAY_MS = 180;
+const DEFAULT_SNAPSHOT_INTERVAL_MS = 50;
+const OFFSET_SMOOTHING = 0.12;
+const INTERVAL_SMOOTHING = 0.2;
+const JITTER_SMOOTHING = 0.15;
+const MOVEMENT_FORCE = 18;
+const MOVEMENT_DRAG = 4.5;
+const MAX_SPEED = 7.5;
+const POSITION_LIMIT = 14;
+
+function cloneVector(position) {
+  return {
+    x: position.x,
+    y: position.y,
+    z: position.z,
+  };
+}
+
+function cloneVelocity(velocity) {
+  return {
+    x: velocity.x,
+    z: velocity.z,
+  };
+}
+
+function lerpPosition(start, end, alpha) {
+  return {
+    x: BABYLON.Scalar.Lerp(start.x, end.x, alpha),
+    y: BABYLON.Scalar.Lerp(start.y, end.y, alpha),
+    z: BABYLON.Scalar.Lerp(start.z, end.z, alpha),
+  };
+}
+
+function clampSpeed(x, z, maxSpeed) {
+  const speed = Math.hypot(x, z);
+  if (speed <= maxSpeed || speed === 0) {
+    return { x, z };
+  }
+
+  const scale = maxSpeed / speed;
+  return {
+    x: x * scale,
+    z: z * scale,
+  };
+}
+
+function clampPosition(value) {
+  return Math.max(-POSITION_LIMIT, Math.min(POSITION_LIMIT, value));
+}
+
+function extrapolateLinear(snapshot, deltaMs) {
+  const deltaSeconds = deltaMs / 1000;
+  return {
+    x: clampPosition(snapshot.position.x + snapshot.velocity.x * deltaSeconds),
+    y: snapshot.position.y,
+    z: clampPosition(snapshot.position.z + snapshot.velocity.z * deltaSeconds),
+  };
+}
+
+function integrateMovement(snapshot, heading, deltaMs) {
+  const deltaSeconds = deltaMs / 1000;
+  const velocity = cloneVelocity(snapshot.velocity);
+  const forceX = Math.cos(heading) * MOVEMENT_FORCE;
+  const forceZ = Math.sin(heading) * MOVEMENT_FORCE;
+
+  velocity.x += forceX * deltaSeconds;
+  velocity.z += forceZ * deltaSeconds;
+
+  const dragFactor = Math.max(0, 1 - MOVEMENT_DRAG * deltaSeconds);
+  velocity.x *= dragFactor;
+  velocity.z *= dragFactor;
+
+  const clampedVelocity = clampSpeed(velocity.x, velocity.z, MAX_SPEED);
+  velocity.x = clampedVelocity.x;
+  velocity.z = clampedVelocity.z;
+
+  return {
+    x: clampPosition(snapshot.position.x + velocity.x * deltaSeconds),
+    y: snapshot.position.y,
+    z: clampPosition(snapshot.position.z + velocity.z * deltaSeconds),
+  };
+}
 
 export class BabylonScene {
   constructor({ canvas, onHeadingChange }) {
@@ -30,12 +117,19 @@ export class BabylonScene {
     this.scene = null;
     this.camera = null;
     this.playerMeshes = new Map();
+    this.playerStates = new Map();
     this.selfPosition = null;
     this.selfSessionId = null;
     this.lastHeading = null;
     this.lastHeadingSentAt = 0;
     this.skyDome = null;
     this.cameraFocus = null;
+    this.cameraFocusPosition = null;
+    this.serverOffsetMs = null;
+    this.snapshotIntervalMs = DEFAULT_SNAPSHOT_INTERVAL_MS;
+    this.snapshotJitterMs = 0;
+    this.lastSnapshotServerTime = null;
+    this.lastSnapshotArrivalTime = null;
   }
 
   async init() {
@@ -47,6 +141,7 @@ export class BabylonScene {
     await this.createEnvironment();
 
     this.engine.runRenderLoop(() => {
+      this.updateRenderedPlayers();
       this.updateCameraFraming();
       this.syncHeadingIntent();
       this.scene.render();
@@ -62,12 +157,15 @@ export class BabylonScene {
       return;
     }
 
+    this.recordSnapshotTiming(view.serverTime);
+
     const visibleIds = new Set(view.visiblePlayers.map((player) => player.sessionId));
 
     for (const [sessionId, mesh] of this.playerMeshes.entries()) {
       if (!visibleIds.has(sessionId)) {
         mesh.dispose(false, true);
         this.playerMeshes.delete(sessionId);
+        this.playerStates.delete(sessionId);
       }
     }
 
@@ -78,22 +176,179 @@ export class BabylonScene {
         this.playerMeshes.set(player.sessionId, mesh);
       }
 
-      mesh.position.set(player.position.x, player.position.y, player.position.z);
+      this.recordPlayerSnapshot(player.sessionId, player, view.serverTime);
     });
 
     if (view.self && this.camera) {
       this.selfSessionId = view.self.sessionId;
-      this.selfPosition = {
-        x: view.self.position.x,
-        y: view.self.position.y,
-        z: view.self.position.z,
-      };
-      this.updateCameraFraming();
     } else {
       this.selfSessionId = null;
       this.selfPosition = null;
       this.lastHeading = null;
+      this.cameraFocusPosition = null;
     }
+  }
+
+  recordSnapshotTiming(serverTime) {
+    const arrivalTime = Date.now();
+    const observedOffset = arrivalTime - serverTime;
+
+    if (this.serverOffsetMs === null) {
+      this.serverOffsetMs = observedOffset;
+    } else {
+      this.serverOffsetMs += (observedOffset - this.serverOffsetMs) * OFFSET_SMOOTHING;
+    }
+
+    if (this.lastSnapshotServerTime !== null) {
+      const serverInterval = Math.max(1, serverTime - this.lastSnapshotServerTime);
+      this.snapshotIntervalMs += (serverInterval - this.snapshotIntervalMs) * INTERVAL_SMOOTHING;
+
+      const arrivalInterval = this.lastSnapshotArrivalTime === null
+        ? serverInterval
+        : Math.max(1, arrivalTime - this.lastSnapshotArrivalTime);
+      const jitterSample = Math.abs(arrivalInterval - serverInterval);
+      this.snapshotJitterMs += (jitterSample - this.snapshotJitterMs) * JITTER_SMOOTHING;
+    }
+
+    this.lastSnapshotServerTime = serverTime;
+    this.lastSnapshotArrivalTime = arrivalTime;
+  }
+
+  getEstimatedServerTime() {
+    if (this.serverOffsetMs === null) {
+      return Date.now();
+    }
+
+    return Date.now() - this.serverOffsetMs;
+  }
+
+  getInterpolationDelayMs() {
+    const targetDelay = this.snapshotIntervalMs * 2 + this.snapshotJitterMs * 2;
+    return BABYLON.Scalar.Clamp(
+      targetDelay,
+      MIN_INTERPOLATION_DELAY_MS,
+      MAX_INTERPOLATION_DELAY_MS,
+    );
+  }
+
+  recordPlayerSnapshot(sessionId, player, serverTime) {
+    let state = this.playerStates.get(sessionId);
+    if (!state) {
+      state = {
+        snapshots: [],
+        renderedPosition: cloneVector(player.position),
+        heading: player.heading,
+      };
+      this.playerStates.set(sessionId, state);
+    }
+
+    state.heading = player.heading;
+    state.snapshots.push({
+      serverTime,
+      heading: player.heading,
+      velocity: cloneVelocity(player.velocity),
+      position: cloneVector(player.position),
+    });
+
+    if (state.snapshots.length > 8) {
+      state.snapshots.splice(0, state.snapshots.length - 8);
+    }
+
+    if (!state.renderedPosition) {
+      state.renderedPosition = cloneVector(player.position);
+    }
+  }
+
+  updateRenderedPlayers() {
+    if (!this.scene) {
+      return;
+    }
+
+    const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
+    const renderTime = this.getEstimatedServerTime() - this.getInterpolationDelayMs();
+
+    for (const [sessionId, mesh] of this.playerMeshes.entries()) {
+      const state = this.playerStates.get(sessionId);
+      if (!state || state.snapshots.length === 0) {
+        continue;
+      }
+
+      const isSelf = sessionId === this.selfSessionId;
+      const targetPosition = isSelf
+        ? this.predictSelfPosition(state)
+        : this.interpolateRemotePosition(state, renderTime);
+
+      state.renderedPosition = this.blendRenderedPosition(
+        state.renderedPosition ?? cloneVector(targetPosition),
+        targetPosition,
+        deltaSeconds,
+      );
+
+      mesh.position.set(
+        state.renderedPosition.x,
+        state.renderedPosition.y,
+        state.renderedPosition.z,
+      );
+
+      if (isSelf) {
+        this.selfPosition = cloneVector(state.renderedPosition);
+      }
+    }
+  }
+
+  interpolateRemotePosition(state, renderTime) {
+    const snapshots = state.snapshots;
+    let previous = snapshots[0];
+    let next = null;
+
+    for (const snapshot of snapshots) {
+      if (snapshot.serverTime <= renderTime) {
+        previous = snapshot;
+        continue;
+      }
+
+      next = snapshot;
+      break;
+    }
+
+    if (next) {
+      const span = Math.max(1, next.serverTime - previous.serverTime);
+      const alpha = BABYLON.Scalar.Clamp((renderTime - previous.serverTime) / span, 0, 1);
+      return lerpPosition(previous.position, next.position, alpha);
+    }
+
+    const latest = snapshots[snapshots.length - 1];
+    const extrapolationMs = BABYLON.Scalar.Clamp(renderTime - latest.serverTime, 0, MAX_EXTRAPOLATION_MS);
+    return extrapolateLinear(latest, extrapolationMs);
+  }
+
+  predictSelfPosition(state) {
+    const latest = state.snapshots[state.snapshots.length - 1];
+    if (!latest) {
+      return state.renderedPosition ?? { x: 0, y: 1, z: 0 };
+    }
+
+    const predictionMs = BABYLON.Scalar.Clamp(
+      this.getEstimatedServerTime() - latest.serverTime,
+      0,
+      MAX_EXTRAPOLATION_MS,
+    );
+    const heading = this.lastHeading ?? latest.heading;
+    return integrateMovement(latest, heading, predictionMs);
+  }
+
+  blendRenderedPosition(current, target, deltaSeconds) {
+    const distance = BABYLON.Vector3.Distance(
+      new BABYLON.Vector3(current.x, current.y, current.z),
+      new BABYLON.Vector3(target.x, target.y, target.z),
+    );
+
+    if (distance > SNAP_DISTANCE) {
+      return cloneVector(target);
+    }
+
+    const alpha = 1 - Math.exp(-POSITION_CORRECTION_RATE * deltaSeconds);
+    return lerpPosition(current, target, alpha);
   }
 
   async enablePhysics() {
@@ -194,23 +449,29 @@ export class BabylonScene {
     const easedTransition = transitionFactor * transitionFactor * (3 - 2 * transitionFactor);
     const targetY = BABYLON.Scalar.Lerp(CAMERA_TARGET_Y_FAR, CAMERA_TARGET_Y_NEAR, easedTransition);
     const desiredRadius = BABYLON.Scalar.Lerp(CAMERA_RADIUS_FAR, CAMERA_RADIUS_NEAR, easedTransition);
+    const desiredFocus = {
+      x: trackedPosition.x,
+      y: trackedPosition.y + targetY,
+      z: trackedPosition.z,
+    };
+    const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
+    const smoothing = 1 - Math.exp(-CAMERA_FOCUS_SMOOTHING * deltaSeconds);
+
+    if (!this.cameraFocusPosition) {
+      this.cameraFocusPosition = desiredFocus;
+    } else {
+      this.cameraFocusPosition = lerpPosition(this.cameraFocusPosition, desiredFocus, smoothing);
+    }
 
     this.camera.radius = desiredRadius;
     this.cameraFocus.position.set(
-      trackedPosition.x,
-      trackedPosition.y + targetY,
-      trackedPosition.z,
+      this.cameraFocusPosition.x,
+      this.cameraFocusPosition.y,
+      this.cameraFocusPosition.z,
     );
   }
 
   getTrackedPlayerPosition() {
-    if (this.selfSessionId) {
-      const selfMesh = this.playerMeshes.get(this.selfSessionId);
-      if (selfMesh) {
-        return selfMesh.position;
-      }
-    }
-
     return this.selfPosition;
   }
 

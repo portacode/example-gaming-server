@@ -38,6 +38,7 @@ export interface SimpleGameView {
   phase: "waiting" | "active";
   connectedPlayers: number;
   maxPlayers: number;
+  serverTime: number;
   self: {
     sessionId: string;
     username: string;
@@ -57,6 +58,11 @@ export interface SimpleGameView {
     sessionId: string;
     username: string;
     connected: boolean;
+    heading: number;
+    velocity: {
+      x: number;
+      z: number;
+    };
     position: {
       x: number;
       y: number;
@@ -300,6 +306,11 @@ export const simpleGameDefinition: GameDefinition<
             sessionId: player.sessionId,
             username: player.username,
             connected: player.connected,
+            heading: player.heading,
+            velocity: {
+              x: player.velocity.x,
+              z: player.velocity.z,
+            },
             position: {
               x: player.position.x,
               y: player.position.y,
@@ -313,6 +324,7 @@ export const simpleGameDefinition: GameDefinition<
       phase: state.phase,
       connectedPlayers: getConnectedPlayers(state),
       maxPlayers: state.maxPlayers,
+      serverTime: Date.now(),
       self: self
         ? {
             sessionId: self.sessionId,
