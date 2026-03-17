@@ -401,7 +401,7 @@ export class BabylonScene {
   }
 
   resolveSelfCollisionPosition(avatar, state, targetPosition, deltaSeconds) {
-    const collisionProxy = this.ensureLocalCollisionProxy(avatar, state, targetPosition);
+    const collisionProxy = this.ensureLocalCollisionProxy(avatar, targetPosition);
     const currentPosition = {
       x: collisionProxy.position.x,
       y: collisionProxy.position.y + PLAYER_VISUAL_Y_OFFSET,
@@ -415,16 +415,6 @@ export class BabylonScene {
     );
     const horizontalDistance = horizontalDelta.length();
     const correctionAlpha = 1 - Math.exp(-PLAYER_POSITION_RECONCILIATION_RATE * deltaSeconds);
-
-    if (horizontalDistance > SNAP_DISTANCE * 1.5) {
-      collisionProxy.position.set(
-        targetPosition.x,
-        targetPosition.y - PLAYER_VISUAL_Y_OFFSET,
-        targetPosition.z,
-      );
-      avatar.verticalVelocity = 0;
-      return cloneVector(targetPosition);
-    }
 
     if (horizontalDistance > 0.0001) {
       horizontalDelta.scaleInPlace(correctionAlpha);
@@ -454,7 +444,7 @@ export class BabylonScene {
     };
   }
 
-  ensureLocalCollisionProxy(avatar, state, targetPosition) {
+  ensureLocalCollisionProxy(avatar, targetPosition) {
     if (avatar.collisionProxy) {
       return avatar.collisionProxy;
     }
