@@ -134,7 +134,7 @@ const MOVEMENT_FORCE = 18;
 const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
 const POSITION_LIMIT = 14;
-const VISIBILITY_RADIUS = 36;
+const VISIBILITY_RADIUS = 100;
 
 function syncPlayerPresenceMap(roomPlayers: MapSchema<PlayerPresenceState>, state: SimpleGameState) {
   const playerIds = new Set(Object.keys(state.players));
