@@ -139,7 +139,6 @@ function clampSpeed(x: number, z: number, maxSpeed: number) {
 const MOVEMENT_FORCE = 18;
 const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
-const POSITION_LIMIT = 14;
 const VISIBILITY_RADIUS = 100;
 
 function syncPlayerPresenceMap(roomPlayers: MapSchema<PlayerPresenceState>, state: SimpleGameState) {
@@ -276,21 +275,13 @@ export const simpleGameDefinition: GameDefinition<
       player.velocity.x = clampedVelocity.x;
       player.velocity.z = clampedVelocity.z;
 
-      const nextX = clampPosition(player.position.x + player.velocity.x * deltaSeconds);
-      const nextZ = clampPosition(player.position.z + player.velocity.z * deltaSeconds);
+      const nextX = player.position.x + player.velocity.x * deltaSeconds;
+      const nextZ = player.position.z + player.velocity.z * deltaSeconds;
 
       if (nextX !== player.position.x || nextZ !== player.position.z) {
         player.position.x = nextX;
         player.position.z = nextZ;
         changed = true;
-      }
-
-      if (Math.abs(player.position.x) >= POSITION_LIMIT) {
-        player.velocity.x = 0;
-      }
-
-      if (Math.abs(player.position.z) >= POSITION_LIMIT) {
-        player.velocity.z = 0;
       }
     });
 

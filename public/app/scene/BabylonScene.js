@@ -14,6 +14,7 @@ const SKY_PRESETS = {
 };
 
 export const WORLD_SKY_PRESET = "overcast-soil";
+const CAMERA_INITIAL_ALPHA = -Math.PI / 2;
 const CAMERA_BETA_MIN = 0.62;
 const CAMERA_BETA_MAX = 1.85;
 const CAMERA_TRANSITION_BETA = 1.02;
@@ -34,12 +35,17 @@ const JITTER_SMOOTHING = 0.15;
 const MOVEMENT_FORCE = 18;
 const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
-const POSITION_LIMIT = 14;
 const PLAYER_VISUAL_Y_OFFSET = 1;
 const TARGET_AVATAR_HEIGHT = 2.2;
 const CHARACTER_MODEL_URL = "/assets/characters/low_poly_humanoid_robot.glb";
+const WORLD_MODEL_URL = "/assets/world/low-poly_industrial_building.glb";
+const GROUND_DIFFUSE_URL = "/assets/world/textures/asphalt_01_diff_1k.jpg";
 const ROTATION_SMOOTHING = 12;
 const WALK_TRIM_START_SECONDS = 1;
+const WORLD_COLLIDER_MIN_SIZE = 0.75;
+const WORLD_COLLIDER_MIN_HEIGHT = 0.05;
+const GROUND_SIZE = 2400;
+const GROUND_TEXTURE_REPEAT = 180;
 
 function cloneVector(position) {
   return {
@@ -77,16 +83,12 @@ function clampSpeed(x, z, maxSpeed) {
   };
 }
 
-function clampPosition(value) {
-  return Math.max(-POSITION_LIMIT, Math.min(POSITION_LIMIT, value));
-}
-
 function extrapolateLinear(snapshot, deltaMs) {
   const deltaSeconds = deltaMs / 1000;
   return {
-    x: clampPosition(snapshot.position.x + snapshot.velocity.x * deltaSeconds),
+    x: snapshot.position.x + snapshot.velocity.x * deltaSeconds,
     y: snapshot.position.y,
-    z: clampPosition(snapshot.position.z + snapshot.velocity.z * deltaSeconds),
+    z: snapshot.position.z + snapshot.velocity.z * deltaSeconds,
   };
 }
 
@@ -108,9 +110,9 @@ function integrateMovement(snapshot, heading, deltaMs) {
   velocity.z = clampedVelocity.z;
 
   return {
-    x: clampPosition(snapshot.position.x + velocity.x * deltaSeconds),
+    x: snapshot.position.x + velocity.x * deltaSeconds,
     y: snapshot.position.y,
-    z: clampPosition(snapshot.position.z + velocity.z * deltaSeconds),
+    z: snapshot.position.z + velocity.z * deltaSeconds,
   };
 }
 
@@ -137,6 +139,15 @@ export class BabylonScene {
     this.lastSnapshotArrivalTime = null;
     this.characterAssetContainer = null;
     this.characterLoadPromise = null;
+    this.worldAssetContainer = null;
+    this.worldLoadPromise = null;
+    this.worldRoot = null;
+    this.worldColliders = [];
+    this.worldCollidersVisible = false;
+    this.worldColliderDebugMaterial = null;
+    this.worldMeshes = [];
+    this.worldBounds = null;
+    this.groundDecorRoot = null;
   }
 
   async init() {
@@ -145,6 +156,7 @@ export class BabylonScene {
     this.scene.clearColor = new BABYLON.Color4(0.93, 0.97, 1, 1);
 
     await this.enablePhysics();
+    await this.preloadAssets();
     await this.createEnvironment();
 
     this.engine.runRenderLoop(() => {
@@ -284,10 +296,11 @@ export class BabylonScene {
       const targetPosition = isSelf
         ? this.predictSelfPosition(state)
         : this.interpolateRemotePosition(state, renderTime);
+      const groundedPosition = this.projectPositionToWorldSurface(targetPosition);
 
       state.renderedPosition = this.blendRenderedPosition(
-        state.renderedPosition ?? cloneVector(targetPosition),
-        targetPosition,
+        state.renderedPosition ?? cloneVector(groundedPosition),
+        groundedPosition,
         deltaSeconds,
       );
 
@@ -369,7 +382,7 @@ export class BabylonScene {
   async createEnvironment() {
     this.camera = new BABYLON.ArcRotateCamera(
       "camera",
-      -Math.PI / 2,
+      CAMERA_INITIAL_ALPHA,
       1.18,
       CAMERA_RADIUS_FAR,
       new BABYLON.Vector3(0, 0, 0),
@@ -387,9 +400,7 @@ export class BabylonScene {
     this.camera.inertia = 0.85;
     this.camera.radius = CAMERA_RADIUS_FAR;
 
-    await this.preloadSkyPreset(WORLD_SKY_PRESET);
     this.applySkyPreset(WORLD_SKY_PRESET);
-    await this.preloadCharacterModel();
 
     const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), this.scene);
     hemi.intensity = 0.88;
@@ -401,44 +412,7 @@ export class BabylonScene {
     const shadowGenerator = new BABYLON.ShadowGenerator(1024, sun);
     shadowGenerator.useBlurExponentialShadowMap = true;
     shadowGenerator.blurKernel = 24;
-
-    const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 36, height: 36 }, this.scene);
-    ground.receiveShadows = true;
-    const groundMaterial = new BABYLON.StandardMaterial("ground-material", this.scene);
-    groundMaterial.diffuseColor = new BABYLON.Color3(0.73, 0.79, 0.69);
-    groundMaterial.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04);
-    ground.material = groundMaterial;
-    new BABYLON.PhysicsAggregate(ground, BABYLON.PhysicsShapeType.BOX, { mass: 0, restitution: 0.1 }, this.scene);
-
-    const groundDetail = BABYLON.MeshBuilder.CreateGround("ground-detail", { width: 35.4, height: 35.4 }, this.scene);
-    groundDetail.position.y = 0.02;
-    groundDetail.receiveShadows = true;
-    const groundDetailMaterial = new BABYLON.StandardMaterial("ground-detail-material", this.scene);
-    groundDetailMaterial.diffuseColor = new BABYLON.Color3(0.47, 0.58, 0.39);
-    groundDetailMaterial.specularColor = new BABYLON.Color3(0.02, 0.02, 0.02);
-    groundDetailMaterial.alpha = 0.24;
-    groundDetail.material = groundDetailMaterial;
-
-    const platform = BABYLON.MeshBuilder.CreateBox("platform", { width: 8, height: 1, depth: 8 }, this.scene);
-    platform.position.y = 0.5;
-    platform.position.x = -10;
-    platform.position.z = -10;
-    platform.receiveShadows = true;
-    const platformMaterial = new BABYLON.StandardMaterial("platform-material", this.scene);
-    platformMaterial.diffuseColor = new BABYLON.Color3(0.87, 0.7, 0.52);
-    platform.material = platformMaterial;
-    new BABYLON.PhysicsAggregate(platform, BABYLON.PhysicsShapeType.BOX, { mass: 0 }, this.scene);
-
-    for (let i = 0; i < 6; i += 1) {
-      const crate = BABYLON.MeshBuilder.CreateBox(`crate-${i}`, { size: 1.4 }, this.scene);
-      crate.position = new BABYLON.Vector3(-10 + (i % 2) * 1.6, 2 + i * 1.2, -10 + Math.floor(i / 2) * 1.6);
-      crate.receiveShadows = true;
-      shadowGenerator.addShadowCaster(crate);
-      const material = new BABYLON.StandardMaterial(`crate-material-${i}`, this.scene);
-      material.diffuseColor = new BABYLON.Color3(0.65, 0.42, 0.25);
-      crate.material = material;
-      new BABYLON.PhysicsAggregate(crate, BABYLON.PhysicsShapeType.BOX, { mass: 1, restitution: 0.2 }, this.scene);
-    }
+    await this.instantiateWorld(shadowGenerator);
   }
 
   updateCameraFraming() {
@@ -485,6 +459,19 @@ export class BabylonScene {
     return this.selfPosition;
   }
 
+  async preloadAssets() {
+    await Promise.all([
+      this.preloadAllSkyPresets(),
+      this.preloadCharacterModel(),
+      this.preloadWorldModel(),
+      this.preloadGroundTextures(),
+    ]);
+  }
+
+  async preloadAllSkyPresets() {
+    await Promise.all(Object.keys(SKY_PRESETS).map((skyKey) => this.preloadSkyPreset(skyKey)));
+  }
+
   async preloadSkyPreset(skyKey) {
     const preset = SKY_PRESETS[skyKey] ?? SKY_PRESETS[WORLD_SKY_PRESET];
 
@@ -493,6 +480,19 @@ export class BabylonScene {
       image.onload = () => resolve();
       image.onerror = () => reject(new Error(`Failed to preload sky asset: ${preset.file}`));
       image.src = preset.file;
+    });
+  }
+
+  async preloadGroundTextures() {
+    await this.preloadImageTexture(GROUND_DIFFUSE_URL);
+  }
+
+  async preloadImageTexture(url) {
+    await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error(`Failed to preload texture asset: ${url}`));
+      image.src = url;
     });
   }
 
@@ -535,6 +535,252 @@ export class BabylonScene {
     });
 
     return this.characterLoadPromise;
+  }
+
+  async preloadWorldModel() {
+    if (this.worldAssetContainer || this.worldLoadPromise) {
+      return this.worldLoadPromise;
+    }
+
+    this.worldLoadPromise = BABYLON.SceneLoader.LoadAssetContainerAsync(
+      WORLD_MODEL_URL,
+      undefined,
+      this.scene,
+    ).then((container) => {
+      this.worldAssetContainer = container;
+    }).catch((error) => {
+      console.error("Failed to load world model", error);
+      this.worldAssetContainer = null;
+      throw error;
+    }).finally(() => {
+      this.worldLoadPromise = null;
+    });
+
+    return this.worldLoadPromise;
+  }
+
+  async instantiateWorld(shadowGenerator) {
+    if (!this.worldAssetContainer) {
+      throw new Error(`World asset was not loaded: ${WORLD_MODEL_URL}`);
+    }
+
+    const instance = this.worldAssetContainer.instantiateModelsToScene(
+      (name) => `${name}-world`,
+      false,
+    );
+    const root = new BABYLON.TransformNode("world-root", this.scene);
+    instance.rootNodes.forEach((node) => {
+      node.parent = root;
+    });
+
+    this.worldRoot = root;
+    this.positionWorldAtOrigin(root);
+    this.prepareWorldMeshes(root, shadowGenerator);
+    this.createTexturedGround();
+    this.buildAutoWorldColliders(root);
+  }
+
+  positionWorldAtOrigin(root) {
+    const bounds = this.computeHierarchyBounds(root);
+    if (!this.areBoundsFinite(bounds)) {
+      return;
+    }
+
+    const center = bounds.min.add(bounds.max).scale(0.5);
+    root.position.x -= center.x;
+    root.position.z -= center.z;
+    root.position.y -= bounds.min.y;
+  }
+
+  prepareWorldMeshes(root, shadowGenerator) {
+    this.worldMeshes = this.getNodeMeshes(root)
+      .filter((mesh) => this.isRenderableWorldMesh(mesh));
+    this.worldBounds = this.computeHierarchyBounds(root);
+
+    this.worldMeshes.forEach((mesh) => {
+      mesh.receiveShadows = true;
+      mesh.isPickable = true;
+      shadowGenerator.addShadowCaster(mesh);
+    });
+  }
+
+  createTexturedGround() {
+    if (this.groundDecorRoot) {
+      this.groundDecorRoot.dispose(false, true);
+    }
+
+    const root = new BABYLON.TransformNode("ground-decor-root", this.scene);
+    const ground = BABYLON.MeshBuilder.CreateGround(
+      "ground-texture-plane",
+      { width: GROUND_SIZE, height: GROUND_SIZE, subdivisions: 2 },
+      this.scene,
+    );
+    ground.parent = root;
+    ground.position.y = -0.03;
+    ground.receiveShadows = true;
+
+    const material = new BABYLON.StandardMaterial("ground-texture-material", this.scene);
+    const diffuseTexture = new BABYLON.Texture(GROUND_DIFFUSE_URL, this.scene, false, false, BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
+    diffuseTexture.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+    diffuseTexture.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+    diffuseTexture.uScale = GROUND_TEXTURE_REPEAT;
+    diffuseTexture.vScale = GROUND_TEXTURE_REPEAT;
+    material.diffuseTexture = diffuseTexture;
+
+    material.specularColor = new BABYLON.Color3(0.18, 0.18, 0.18);
+    material.emissiveColor = new BABYLON.Color3(0.015, 0.015, 0.015);
+    ground.material = material;
+
+    this.groundDecorRoot = root;
+  }
+
+  buildAutoWorldColliders(root) {
+    this.worldColliders.forEach((collider) => collider.dispose(false, true));
+    this.worldColliders = [];
+
+    this.collectColliderTargets(root).forEach(({ mesh, bounds }, index) => {
+      const size = bounds.max.subtract(bounds.min);
+      const center = bounds.min.add(bounds.max).scale(0.5);
+      const collider = BABYLON.MeshBuilder.CreateBox(
+        `world-collider-${index}`,
+        {
+          width: Math.max(size.x, WORLD_COLLIDER_MIN_SIZE),
+          height: Math.max(size.y, WORLD_COLLIDER_MIN_HEIGHT),
+          depth: Math.max(size.z, WORLD_COLLIDER_MIN_SIZE),
+        },
+        this.scene,
+      );
+      collider.position.copyFrom(center);
+      collider.material = this.getWorldColliderDebugMaterial();
+      collider.isVisible = this.worldCollidersVisible;
+      collider.visibility = this.worldCollidersVisible ? 0.35 : 0;
+      collider.isPickable = false;
+      collider.enableEdgesRendering();
+      collider.edgesWidth = 2;
+      collider.edgesColor = new BABYLON.Color4(1, 0.35, 0.1, 0.95);
+      collider.renderOverlay = this.worldCollidersVisible;
+      collider.overlayColor = new BABYLON.Color3(1, 0.45, 0.12);
+      collider.overlayAlpha = this.worldCollidersVisible ? 0.55 : 0;
+      collider.metadata = { sourceNode: mesh.name };
+      new BABYLON.PhysicsAggregate(
+        collider,
+        BABYLON.PhysicsShapeType.BOX,
+        { mass: 0, restitution: 0.05, friction: 0.9 },
+        this.scene,
+      );
+      this.worldColliders.push(collider);
+    });
+  }
+
+  getWorldColliderDebugMaterial() {
+    if (this.worldColliderDebugMaterial) {
+      return this.worldColliderDebugMaterial;
+    }
+
+    const material = new BABYLON.StandardMaterial("world-collider-debug-material", this.scene);
+    material.diffuseColor = new BABYLON.Color3(1, 0.42, 0.12);
+    material.emissiveColor = new BABYLON.Color3(0.65, 0.18, 0.04);
+    material.alpha = 0.35;
+    material.backFaceCulling = false;
+    this.worldColliderDebugMaterial = material;
+    return material;
+  }
+
+  setWorldColliderDebugVisible(visible) {
+    this.worldCollidersVisible = visible;
+    this.worldColliders.forEach((collider) => {
+      collider.isVisible = visible;
+      collider.visibility = visible ? 0.35 : 0;
+      collider.renderOverlay = visible;
+      collider.overlayColor = new BABYLON.Color3(1, 0.45, 0.12);
+      collider.overlayAlpha = visible ? 0.55 : 0;
+    });
+  }
+
+  areWorldCollidersVisible() {
+    return this.worldCollidersVisible;
+  }
+
+  getWorldColliderCount() {
+    return this.worldColliders.length;
+  }
+
+  collectColliderTargets(root) {
+    const targets = this.getNodeMeshes(root)
+      .map((mesh) => ({
+        mesh,
+        bounds: this.getMeshBounds(mesh),
+      }))
+      .filter(({ bounds }) => this.isColliderCandidate(bounds))
+      .sort((a, b) => this.getBoundsVolume(b.bounds) - this.getBoundsVolume(a.bounds));
+
+    if (targets.length > 0) {
+      return targets;
+    }
+
+    return [];
+  }
+
+  isColliderCandidate(bounds) {
+    if (!this.areBoundsFinite(bounds)) {
+      return false;
+    }
+
+    const size = bounds.max.subtract(bounds.min);
+    return size.x >= WORLD_COLLIDER_MIN_SIZE
+      && size.y >= WORLD_COLLIDER_MIN_HEIGHT
+      && size.z >= WORLD_COLLIDER_MIN_SIZE;
+  }
+
+  areBoundsFinite(bounds) {
+    return Number.isFinite(bounds.min.x)
+      && Number.isFinite(bounds.min.y)
+      && Number.isFinite(bounds.min.z)
+      && Number.isFinite(bounds.max.x)
+      && Number.isFinite(bounds.max.y)
+      && Number.isFinite(bounds.max.z);
+  }
+
+  getBoundsVolume(bounds) {
+    const size = bounds.max.subtract(bounds.min);
+    return Math.max(size.x, 0) * Math.max(size.y, 0) * Math.max(size.z, 0);
+  }
+
+  isRenderableWorldMesh(mesh) {
+    return mesh && mesh.isEnabled() && mesh.getTotalVertices() > 0;
+  }
+
+  getMeshBounds(mesh) {
+    const boundingBox = mesh.getBoundingInfo().boundingBox;
+    return {
+      min: boundingBox.minimumWorld.clone(),
+      max: boundingBox.maximumWorld.clone(),
+    };
+  }
+
+  projectPositionToWorldSurface(position) {
+    if (!this.worldMeshes.length || !this.worldBounds) {
+      return cloneVector(position);
+    }
+
+    const rayStartY = this.worldBounds.max.y + TARGET_AVATAR_HEIGHT * 4;
+    const rayLength = rayStartY - this.worldBounds.min.y + TARGET_AVATAR_HEIGHT * 8;
+    const ray = new BABYLON.Ray(
+      new BABYLON.Vector3(position.x, rayStartY, position.z),
+      new BABYLON.Vector3(0, -1, 0),
+      rayLength,
+    );
+    const hit = this.scene.pickWithRay(ray, (mesh) => this.worldMeshes.includes(mesh), false);
+
+    if (!hit?.hit || !hit.pickedPoint) {
+      return cloneVector(position);
+    }
+
+    return {
+      x: position.x,
+      y: hit.pickedPoint.y + PLAYER_VISUAL_Y_OFFSET,
+      z: position.z,
+    };
   }
 
   createPlayerAvatar(isSelf) {
@@ -627,7 +873,7 @@ export class BabylonScene {
   }
 
   computeHierarchyBounds(root) {
-    const childMeshes = root.getChildMeshes(true);
+    const childMeshes = this.getNodeMeshes(root);
     let min = new BABYLON.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     let max = new BABYLON.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
 
@@ -638,6 +884,23 @@ export class BabylonScene {
     });
 
     return { min, max };
+  }
+
+  getNodeMeshes(node) {
+    const meshes = [];
+    if (typeof node.getBoundingInfo === "function") {
+      meshes.push(node);
+    }
+
+    if (typeof node.getChildMeshes === "function") {
+      node.getChildMeshes(true).forEach((mesh) => {
+        if (!meshes.includes(mesh)) {
+          meshes.push(mesh);
+        }
+      });
+    }
+
+    return meshes;
   }
 
   tintAvatar(instance, isSelf) {
