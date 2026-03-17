@@ -35,6 +35,11 @@ const MOVEMENT_FORCE = 18;
 const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
 const POSITION_LIMIT = 14;
+const PLAYER_VISUAL_Y_OFFSET = 1;
+const TARGET_AVATAR_HEIGHT = 2.2;
+const CHARACTER_MODEL_URL = "/assets/characters/low_poly_humanoid_robot.glb";
+const ROTATION_SMOOTHING = 12;
+const WALK_TRIM_START_SECONDS = 1;
 
 function cloneVector(position) {
   return {
@@ -130,6 +135,8 @@ export class BabylonScene {
     this.snapshotJitterMs = 0;
     this.lastSnapshotServerTime = null;
     this.lastSnapshotArrivalTime = null;
+    this.characterAssetContainer = null;
+    this.characterLoadPromise = null;
   }
 
   async init() {
@@ -161,19 +168,19 @@ export class BabylonScene {
 
     const visibleIds = new Set(view.visiblePlayers.map((player) => player.sessionId));
 
-    for (const [sessionId, mesh] of this.playerMeshes.entries()) {
+    for (const [sessionId, avatar] of this.playerMeshes.entries()) {
       if (!visibleIds.has(sessionId)) {
-        mesh.dispose(false, true);
+        this.disposePlayerAvatar(avatar);
         this.playerMeshes.delete(sessionId);
         this.playerStates.delete(sessionId);
       }
     }
 
     view.visiblePlayers.forEach((player) => {
-      let mesh = this.playerMeshes.get(player.sessionId);
-      if (!mesh) {
-        mesh = this.createPlayerMesh(player.sessionId === view.self?.sessionId);
-        this.playerMeshes.set(player.sessionId, mesh);
+      let avatar = this.playerMeshes.get(player.sessionId);
+      if (!avatar) {
+        avatar = this.createPlayerAvatar(player.sessionId === view.self?.sessionId);
+        this.playerMeshes.set(player.sessionId, avatar);
       }
 
       this.recordPlayerSnapshot(player.sessionId, player, view.serverTime);
@@ -267,7 +274,7 @@ export class BabylonScene {
     const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
     const renderTime = this.getEstimatedServerTime() - this.getInterpolationDelayMs();
 
-    for (const [sessionId, mesh] of this.playerMeshes.entries()) {
+    for (const [sessionId, avatar] of this.playerMeshes.entries()) {
       const state = this.playerStates.get(sessionId);
       if (!state || state.snapshots.length === 0) {
         continue;
@@ -284,11 +291,13 @@ export class BabylonScene {
         deltaSeconds,
       );
 
-      mesh.position.set(
+      avatar.root.position.set(
         state.renderedPosition.x,
-        state.renderedPosition.y,
+        state.renderedPosition.y - PLAYER_VISUAL_Y_OFFSET,
         state.renderedPosition.z,
       );
+      this.updateAvatarOrientation(avatar, state, deltaSeconds, isSelf);
+      this.updateAvatarAnimation(avatar, state);
 
       if (isSelf) {
         this.selfPosition = cloneVector(state.renderedPosition);
@@ -380,6 +389,7 @@ export class BabylonScene {
 
     await this.preloadSkyPreset(WORLD_SKY_PRESET);
     this.applySkyPreset(WORLD_SKY_PRESET);
+    await this.preloadCharacterModel();
 
     const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), this.scene);
     hemi.intensity = 0.88;
@@ -506,14 +516,288 @@ export class BabylonScene {
     this.scene.clearColor = new BABYLON.Color4(0.72, 0.81, 0.92, 1);
   }
 
-  createPlayerMesh(isSelf) {
-    const mesh = BABYLON.MeshBuilder.CreateCapsule(`player-${this.playerMeshes.size}`, { radius: 0.65, height: 2.2 }, this.scene);
+  async preloadCharacterModel() {
+    if (this.characterAssetContainer || this.characterLoadPromise) {
+      return this.characterLoadPromise;
+    }
+
+    this.characterLoadPromise = BABYLON.SceneLoader.LoadAssetContainerAsync(
+      CHARACTER_MODEL_URL,
+      undefined,
+      this.scene,
+    ).then((container) => {
+      this.characterAssetContainer = container;
+    }).catch((error) => {
+      console.error("Failed to load character model", error);
+      this.characterAssetContainer = null;
+    }).finally(() => {
+      this.characterLoadPromise = null;
+    });
+
+    return this.characterLoadPromise;
+  }
+
+  createPlayerAvatar(isSelf) {
+    if (this.characterAssetContainer) {
+      const instance = this.characterAssetContainer.instantiateModelsToScene(
+        (name) => `${name}-${this.playerMeshes.size}`,
+        false,
+      );
+      const root = new BABYLON.TransformNode(`player-root-${this.playerMeshes.size}`, this.scene);
+
+      instance.rootNodes.forEach((node) => {
+        node.parent = root;
+      });
+
+      this.normalizeAvatar(root);
+      this.tintAvatar(instance, isSelf);
+      const animationGroups = this.selectAvatarAnimationGroups(instance.animationGroups);
+      const lockedNodes = this.captureLockedAnimationNodes(instance);
+      const animationRanges = animationGroups.map((group) => this.getAnimationPlaybackRange(group));
+      animationGroups.forEach((group, index) => {
+        const range = animationRanges[index];
+        group.targetedAnimations.forEach(({ animation }) => {
+          animation.loopMode = BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE;
+        });
+        group.normalize(range.from, range.to);
+        group.stop();
+        group.goToFrame(range.from);
+        group.play(true);
+        group.speedRatio = 1;
+      });
+
+      return {
+        root,
+        animationGroups,
+        animationRanges,
+        lockedNodes,
+      };
+    }
+
+    return this.createFallbackAvatar(isSelf);
+  }
+
+  createFallbackAvatar(isSelf) {
+    const root = new BABYLON.TransformNode(`player-root-${this.playerMeshes.size}`, this.scene);
+    const mesh = BABYLON.MeshBuilder.CreateCapsule(
+      `player-${this.playerMeshes.size}`,
+      { radius: 0.65, height: TARGET_AVATAR_HEIGHT },
+      this.scene,
+    );
     const material = new BABYLON.StandardMaterial(`player-material-${this.playerMeshes.size}`, this.scene);
     material.diffuseColor = isSelf ? new BABYLON.Color3(0.19, 0.53, 0.95) : new BABYLON.Color3(0.91, 0.37, 0.2);
     material.emissiveColor = isSelf ? new BABYLON.Color3(0.03, 0.08, 0.18) : new BABYLON.Color3(0.15, 0.06, 0.02);
     mesh.material = material;
     mesh.receiveShadows = true;
-    return mesh;
+    mesh.parent = root;
+    mesh.position.y = PLAYER_VISUAL_Y_OFFSET;
+
+    return {
+      root,
+      animationGroups: [],
+      animationRanges: [],
+      lockedNodes: [],
+    };
+  }
+
+  normalizeAvatar(root) {
+    const bounds = this.computeHierarchyBounds(root);
+    if (!Number.isFinite(bounds.min.y) || !Number.isFinite(bounds.max.y)) {
+      return;
+    }
+    const currentHeight = Math.max(0.001, bounds.max.y - bounds.min.y);
+    const scale = TARGET_AVATAR_HEIGHT / currentHeight;
+    root.scaling.setAll(scale);
+
+    const scaledBounds = this.computeHierarchyBounds(root);
+    const yOffset = -scaledBounds.min.y;
+
+    root.getChildTransformNodes(true).forEach((node) => {
+      if (node.parent === root) {
+        node.position.y += yOffset;
+      }
+    });
+
+    root.getChildMeshes(true).forEach((mesh) => {
+      if (mesh.parent === root) {
+        mesh.position.y += yOffset;
+      }
+      mesh.receiveShadows = true;
+    });
+  }
+
+  computeHierarchyBounds(root) {
+    const childMeshes = root.getChildMeshes(true);
+    let min = new BABYLON.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+    let max = new BABYLON.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
+
+    childMeshes.forEach((mesh) => {
+      const info = mesh.getHierarchyBoundingVectors(true);
+      min = BABYLON.Vector3.Minimize(min, info.min);
+      max = BABYLON.Vector3.Maximize(max, info.max);
+    });
+
+    return { min, max };
+  }
+
+  tintAvatar(instance, isSelf) {
+    const tint = isSelf ? new BABYLON.Color3(0.72, 0.88, 1) : new BABYLON.Color3(1, 0.82, 0.72);
+    const emissive = isSelf ? new BABYLON.Color3(0.03, 0.08, 0.18) : new BABYLON.Color3(0.12, 0.05, 0.02);
+
+    instance.rootNodes.forEach((node) => {
+      node.getChildMeshes(true).forEach((mesh) => {
+        if (!mesh.material || typeof mesh.material.clone !== "function") {
+          return;
+        }
+
+        mesh.material = mesh.material.clone(`${mesh.material.name}-${isSelf ? "self" : "other"}-${this.playerMeshes.size}`);
+        if ("albedoColor" in mesh.material && mesh.material.albedoColor) {
+          mesh.material.albedoColor = mesh.material.albedoColor.multiply(tint);
+        } else if ("diffuseColor" in mesh.material && mesh.material.diffuseColor) {
+          mesh.material.diffuseColor = mesh.material.diffuseColor.multiply(tint);
+        }
+
+        if ("emissiveColor" in mesh.material) {
+          mesh.material.emissiveColor = emissive;
+        }
+      });
+    });
+  }
+
+  selectAvatarAnimationGroups(animationGroups) {
+    const motionGroups = animationGroups.filter((group) => !/t[\s_-]*pose/i.test(group.name ?? ""));
+    return motionGroups.length ? motionGroups : animationGroups;
+  }
+
+  captureLockedAnimationNodes(instance) {
+    const namesToLock = new Set(["lpBip Footsteps", "lpBip_01"]);
+    const lockedNodes = [];
+
+    instance.rootNodes.forEach((rootNode) => {
+      const transformNodes = [rootNode, ...rootNode.getChildTransformNodes(true)];
+      transformNodes.forEach((node) => {
+        if (!namesToLock.has(node.name)) {
+          return;
+        }
+
+        lockedNodes.push({
+          node,
+          position: node.position.clone(),
+          rotationQuaternion: node.rotationQuaternion ? node.rotationQuaternion.clone() : null,
+          rotation: node.rotation.clone(),
+          scaling: node.scaling.clone(),
+        });
+      });
+    });
+
+    return lockedNodes;
+  }
+
+  getAnimationPlaybackRange(group) {
+    let from = Number.POSITIVE_INFINITY;
+    let to = Number.NEGATIVE_INFINITY;
+    let maxFramePerSecond = 0;
+
+    group.targetedAnimations.forEach((targetedAnimation) => {
+      const keys = targetedAnimation.animation.getKeys();
+      if (!keys.length) {
+        return;
+      }
+
+      maxFramePerSecond = Math.max(maxFramePerSecond, targetedAnimation.animation.framePerSecond || 0);
+      from = Math.min(from, keys[0].frame);
+      to = Math.max(to, keys[keys.length - 1].frame);
+    });
+
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) {
+      return {
+        from: group.from,
+        to: group.to,
+      };
+    }
+
+    if (/walk/i.test(group.name ?? "") && maxFramePerSecond > 0) {
+      const trimmedFrom = from + WALK_TRIM_START_SECONDS * maxFramePerSecond;
+      if (trimmedFrom < to) {
+        from = trimmedFrom;
+      }
+    }
+
+    return { from, to };
+  }
+
+  updateAvatarAnimation(avatar, state) {
+    if (!avatar.animationGroups.length) {
+      return;
+    }
+
+    avatar.animationGroups.forEach((group, index) => {
+      const range = avatar.animationRanges[index] ?? { from: group.from, to: group.to };
+      if (!group.isPlaying) {
+        group.goToFrame(range.from);
+        group.play(true);
+      }
+      group.speedRatio = 1;
+    });
+
+    avatar.lockedNodes.forEach(({ node, position, rotationQuaternion, rotation, scaling }) => {
+      node.position.copyFrom(position);
+      if (rotationQuaternion) {
+        if (!node.rotationQuaternion) {
+          node.rotationQuaternion = rotationQuaternion.clone();
+        } else {
+          node.rotationQuaternion.copyFrom(rotationQuaternion);
+        }
+      } else if (node.rotationQuaternion) {
+        node.rotationQuaternion = null;
+      }
+      node.rotation.copyFrom(rotation);
+      node.scaling.copyFrom(scaling);
+    });
+  }
+
+  updateAvatarOrientation(avatar, state, deltaSeconds, isSelf) {
+    let direction = null;
+
+    if (isSelf && this.camera && this.selfPosition) {
+      direction = new BABYLON.Vector3(
+        this.selfPosition.x - this.camera.position.x,
+        0,
+        this.selfPosition.z - this.camera.position.z,
+      );
+    } else {
+      const latest = state.snapshots[state.snapshots.length - 1];
+      const velocity = latest ? new BABYLON.Vector3(latest.velocity.x, 0, latest.velocity.z) : null;
+      if (velocity && velocity.lengthSquared() > 0.0001) {
+        direction = velocity;
+      } else if (latest) {
+        direction = new BABYLON.Vector3(Math.cos(latest.heading), 0, Math.sin(latest.heading));
+      }
+    }
+
+    if (!direction || direction.lengthSquared() < 0.0001) {
+      return;
+    }
+
+    direction.normalize();
+    const targetRotation = BABYLON.Quaternion.FromLookDirectionLH(direction, BABYLON.Vector3.Up())
+      .multiply(BABYLON.Quaternion.FromEulerAngles(0, Math.PI, 0));
+    const smoothing = 1 - Math.exp(-ROTATION_SMOOTHING * deltaSeconds);
+    if (!avatar.root.rotationQuaternion) {
+      avatar.root.rotationQuaternion = targetRotation;
+      return;
+    }
+
+    avatar.root.rotationQuaternion = BABYLON.Quaternion.Slerp(
+      avatar.root.rotationQuaternion,
+      targetRotation,
+      smoothing,
+    );
+  }
+
+  disposePlayerAvatar(avatar) {
+    avatar.animationGroups.forEach((group) => group.dispose());
+    avatar.root.dispose(false, true);
   }
 
   syncHeadingIntent() {
