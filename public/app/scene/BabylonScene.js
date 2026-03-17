@@ -37,13 +37,16 @@ const MOVEMENT_DRAG = 4.5;
 const MAX_SPEED = 7.5;
 const PLAYER_VISUAL_Y_OFFSET = 1;
 const TARGET_AVATAR_HEIGHT = 2.2;
+const PLAYER_COLLIDER_RADIUS = 0.35;
+const PLAYER_COLLIDER_HEIGHT = 1.8;
+const PLAYER_GRAVITY = 28;
+const PLAYER_MAX_FALL_SPEED = 24;
+const PLAYER_POSITION_RECONCILIATION_RATE = 14;
 const CHARACTER_MODEL_URL = "/assets/characters/low_poly_humanoid_robot.glb";
 const WORLD_MODEL_URL = "/assets/world/low-poly_industrial_building.glb";
 const GROUND_DIFFUSE_URL = "/assets/world/textures/asphalt_01_diff_1k.jpg";
 const ROTATION_SMOOTHING = 12;
 const WALK_TRIM_START_SECONDS = 1;
-const WORLD_COLLIDER_MIN_SIZE = 0.75;
-const WORLD_COLLIDER_MIN_HEIGHT = 0.05;
 const GROUND_SIZE = 2400;
 const GROUND_TEXTURE_REPEAT = 180;
 
@@ -144,8 +147,24 @@ export class BabylonScene {
     this.worldRoot = null;
     this.worldColliders = [];
     this.worldCollidersVisible = false;
-    this.worldColliderDebugMaterial = null;
+    this.worldColliderStats = {
+      attempted: 0,
+      created: 0,
+      failed: 0,
+      failedMeshes: [],
+    };
+    this.worldImportStats = {
+      rootNodeCount: 0,
+      childMeshCount: 0,
+      meshNames: [],
+      rootNodeNames: [],
+      rootNodeTypes: [],
+      sceneMeshCount: 0,
+      sceneMeshNames: [],
+    };
+    this.worldImportedMeshes = [];
     this.worldMeshes = [];
+    this.worldSurfaceMeshes = [];
     this.worldBounds = null;
     this.groundDecorRoot = null;
   }
@@ -154,6 +173,7 @@ export class BabylonScene {
     this.engine = new BABYLON.Engine(this.canvas, true, { preserveDrawingBuffer: true, stencil: true });
     this.scene = new BABYLON.Scene(this.engine);
     this.scene.clearColor = new BABYLON.Color4(0.93, 0.97, 1, 1);
+    this.scene.collisionsEnabled = true;
 
     await this.enablePhysics();
     await this.preloadAssets();
@@ -293,16 +313,23 @@ export class BabylonScene {
       }
 
       const isSelf = sessionId === this.selfSessionId;
-      const targetPosition = isSelf
-        ? this.predictSelfPosition(state)
-        : this.interpolateRemotePosition(state, renderTime);
-      const groundedPosition = this.projectPositionToWorldSurface(targetPosition);
-
-      state.renderedPosition = this.blendRenderedPosition(
-        state.renderedPosition ?? cloneVector(groundedPosition),
-        groundedPosition,
-        deltaSeconds,
-      );
+      if (isSelf) {
+        const targetPosition = this.predictSelfPosition(state);
+        state.renderedPosition = this.resolveSelfCollisionPosition(
+          avatar,
+          state,
+          targetPosition,
+          deltaSeconds,
+        );
+      } else {
+        const targetPosition = this.interpolateRemotePosition(state, renderTime);
+        const groundedPosition = this.projectPositionToWorldSurface(targetPosition);
+        state.renderedPosition = this.blendRenderedPosition(
+          state.renderedPosition ?? cloneVector(groundedPosition),
+          groundedPosition,
+          deltaSeconds,
+        );
+      }
 
       avatar.root.position.set(
         state.renderedPosition.x,
@@ -371,6 +398,95 @@ export class BabylonScene {
 
     const alpha = 1 - Math.exp(-POSITION_CORRECTION_RATE * deltaSeconds);
     return lerpPosition(current, target, alpha);
+  }
+
+  resolveSelfCollisionPosition(avatar, state, targetPosition, deltaSeconds) {
+    const collisionProxy = this.ensureLocalCollisionProxy(avatar, state, targetPosition);
+    const currentPosition = {
+      x: collisionProxy.position.x,
+      y: collisionProxy.position.y + PLAYER_VISUAL_Y_OFFSET,
+      z: collisionProxy.position.z,
+    };
+
+    const horizontalDelta = new BABYLON.Vector3(
+      targetPosition.x - currentPosition.x,
+      0,
+      targetPosition.z - currentPosition.z,
+    );
+    const horizontalDistance = horizontalDelta.length();
+    const correctionAlpha = 1 - Math.exp(-PLAYER_POSITION_RECONCILIATION_RATE * deltaSeconds);
+
+    if (horizontalDistance > SNAP_DISTANCE * 1.5) {
+      collisionProxy.position.set(
+        targetPosition.x,
+        targetPosition.y - PLAYER_VISUAL_Y_OFFSET,
+        targetPosition.z,
+      );
+      avatar.verticalVelocity = 0;
+      return cloneVector(targetPosition);
+    }
+
+    if (horizontalDistance > 0.0001) {
+      horizontalDelta.scaleInPlace(correctionAlpha);
+    }
+
+    avatar.verticalVelocity = Math.max(
+      avatar.verticalVelocity - PLAYER_GRAVITY * deltaSeconds,
+      -PLAYER_MAX_FALL_SPEED,
+    );
+
+    const previousY = collisionProxy.position.y;
+    collisionProxy.moveWithCollisions(new BABYLON.Vector3(
+      horizontalDelta.x,
+      avatar.verticalVelocity * deltaSeconds,
+      horizontalDelta.z,
+    ));
+
+    const deltaY = collisionProxy.position.y - previousY;
+    if (deltaY >= -0.001 && avatar.verticalVelocity < 0) {
+      avatar.verticalVelocity = 0;
+    }
+
+    return {
+      x: collisionProxy.position.x,
+      y: collisionProxy.position.y + PLAYER_VISUAL_Y_OFFSET,
+      z: collisionProxy.position.z,
+    };
+  }
+
+  ensureLocalCollisionProxy(avatar, state, targetPosition) {
+    if (avatar.collisionProxy) {
+      return avatar.collisionProxy;
+    }
+
+    const proxy = BABYLON.MeshBuilder.CreateBox(
+      `player-collision-proxy-${this.playerMeshes.size}`,
+      {
+        width: PLAYER_COLLIDER_RADIUS * 2,
+        depth: PLAYER_COLLIDER_RADIUS * 2,
+        height: PLAYER_COLLIDER_HEIGHT,
+      },
+      this.scene,
+    );
+    proxy.isVisible = false;
+    proxy.visibility = 0;
+    proxy.isPickable = false;
+    proxy.checkCollisions = true;
+    proxy.ellipsoid = new BABYLON.Vector3(
+      PLAYER_COLLIDER_RADIUS,
+      PLAYER_COLLIDER_HEIGHT * 0.5,
+      PLAYER_COLLIDER_RADIUS,
+    );
+    proxy.ellipsoidOffset = new BABYLON.Vector3(0, PLAYER_COLLIDER_HEIGHT * 0.5, 0);
+    proxy.position.set(
+      targetPosition.x,
+      targetPosition.y - PLAYER_VISUAL_Y_OFFSET,
+      targetPosition.z,
+    );
+
+    avatar.collisionProxy = proxy;
+    avatar.verticalVelocity = 0;
+    return proxy;
   }
 
   async enablePhysics() {
@@ -564,6 +680,7 @@ export class BabylonScene {
       throw new Error(`World asset was not loaded: ${WORLD_MODEL_URL}`);
     }
 
+    const previousSceneMeshIds = new Set((this.scene?.meshes ?? []).map((mesh) => mesh.uniqueId));
     const instance = this.worldAssetContainer.instantiateModelsToScene(
       (name) => `${name}-world`,
       false,
@@ -574,10 +691,28 @@ export class BabylonScene {
     });
 
     this.worldRoot = root;
+    this.captureWorldImportStats(root, instance.rootNodes, previousSceneMeshIds);
     this.positionWorldAtOrigin(root);
     this.prepareWorldMeshes(root, shadowGenerator);
     this.createTexturedGround();
     this.buildAutoWorldColliders(root);
+  }
+
+  captureWorldImportStats(root, rootNodes = [], previousSceneMeshIds = new Set()) {
+    const childMeshes = this.getNodeMeshes(root)
+      .filter((mesh) => this.isRenderableWorldMesh(mesh));
+    const sceneMeshes = (this.scene?.meshes ?? [])
+      .filter((mesh) => this.isRenderableWorldMesh(mesh));
+    this.worldImportedMeshes = sceneMeshes.filter((mesh) => !previousSceneMeshIds.has(mesh.uniqueId));
+    this.worldImportStats = {
+      rootNodeCount: rootNodes.length,
+      childMeshCount: childMeshes.length,
+      meshNames: childMeshes.map((mesh) => mesh.name || `mesh-${mesh.uniqueId}`),
+      rootNodeNames: rootNodes.map((node) => node?.name || `node-${node?.uniqueId ?? "unknown"}`),
+      rootNodeTypes: rootNodes.map((node) => node?.getClassName?.() ?? typeof node),
+      sceneMeshCount: sceneMeshes.length,
+      sceneMeshNames: sceneMeshes.map((mesh) => mesh.name || `mesh-${mesh.uniqueId}`),
+    };
   }
 
   positionWorldAtOrigin(root) {
@@ -593,13 +728,18 @@ export class BabylonScene {
   }
 
   prepareWorldMeshes(root, shadowGenerator) {
-    this.worldMeshes = this.getNodeMeshes(root)
-      .filter((mesh) => this.isRenderableWorldMesh(mesh));
-    this.worldBounds = this.computeHierarchyBounds(root);
+    this.worldMeshes = this.worldImportedMeshes.length
+      ? [...this.worldImportedMeshes]
+      : this.getNodeMeshes(root).filter((mesh) => this.isRenderableWorldMesh(mesh));
+    this.worldSurfaceMeshes = [...this.worldMeshes];
+    this.worldBounds = this.worldMeshes.length
+      ? this.computeMeshBounds(this.worldMeshes)
+      : this.computeHierarchyBounds(root);
 
     this.worldMeshes.forEach((mesh) => {
       mesh.receiveShadows = true;
       mesh.isPickable = true;
+      mesh.checkCollisions = true;
       shadowGenerator.addShadowCaster(mesh);
     });
   }
@@ -618,6 +758,8 @@ export class BabylonScene {
     ground.parent = root;
     ground.position.y = -0.03;
     ground.receiveShadows = true;
+    ground.isPickable = true;
+    ground.checkCollisions = true;
 
     const material = new BABYLON.StandardMaterial("ground-texture-material", this.scene);
     const diffuseTexture = new BABYLON.Texture(GROUND_DIFFUSE_URL, this.scene, false, false, BABYLON.Texture.TRILINEAR_SAMPLINGMODE);
@@ -632,68 +774,83 @@ export class BabylonScene {
     ground.material = material;
 
     this.groundDecorRoot = root;
+    this.worldSurfaceMeshes = [...this.worldSurfaceMeshes, ground];
   }
 
   buildAutoWorldColliders(root) {
-    this.worldColliders.forEach((collider) => collider.dispose(false, true));
-    this.worldColliders = [];
+    this.disposeWorldColliders();
+    this.refreshWorldMeshBounds(root);
+    this.worldColliderStats = {
+      attempted: this.worldMeshes.length,
+      created: 0,
+      failed: 0,
+      failedMeshes: [],
+    };
 
-    this.collectColliderTargets(root).forEach(({ mesh, bounds }, index) => {
-      const size = bounds.max.subtract(bounds.min);
-      const center = bounds.min.add(bounds.max).scale(0.5);
-      const collider = BABYLON.MeshBuilder.CreateBox(
-        `world-collider-${index}`,
-        {
-          width: Math.max(size.x, WORLD_COLLIDER_MIN_SIZE),
-          height: Math.max(size.y, WORLD_COLLIDER_MIN_HEIGHT),
-          depth: Math.max(size.z, WORLD_COLLIDER_MIN_SIZE),
-        },
-        this.scene,
-      );
-      collider.position.copyFrom(center);
-      collider.material = this.getWorldColliderDebugMaterial();
-      collider.isVisible = this.worldCollidersVisible;
-      collider.visibility = this.worldCollidersVisible ? 0.35 : 0;
-      collider.isPickable = false;
-      collider.enableEdgesRendering();
-      collider.edgesWidth = 2;
-      collider.edgesColor = new BABYLON.Color4(1, 0.35, 0.1, 0.95);
-      collider.renderOverlay = this.worldCollidersVisible;
-      collider.overlayColor = new BABYLON.Color3(1, 0.45, 0.12);
-      collider.overlayAlpha = this.worldCollidersVisible ? 0.55 : 0;
-      collider.metadata = { sourceNode: mesh.name };
-      new BABYLON.PhysicsAggregate(
-        collider,
-        BABYLON.PhysicsShapeType.BOX,
-        { mass: 0, restitution: 0.05, friction: 0.9 },
-        this.scene,
-      );
-      this.worldColliders.push(collider);
+    this.worldMeshes.forEach((mesh, index) => {
+      const collider = this.createWorldMeshCollider(mesh, index);
+      if (collider) {
+        this.worldColliders.push(collider);
+        this.worldColliderStats.created += 1;
+      } else {
+        this.worldColliderStats.failed += 1;
+        this.worldColliderStats.failedMeshes.push(mesh.name || `mesh-${mesh.uniqueId}`);
+      }
     });
   }
 
-  getWorldColliderDebugMaterial() {
-    if (this.worldColliderDebugMaterial) {
-      return this.worldColliderDebugMaterial;
+  disposeWorldColliders() {
+    this.worldColliders.forEach(({ aggregate, sourceMesh }) => {
+      aggregate?.dispose?.();
+      sourceMesh.renderOverlay = false;
+      sourceMesh.overlayAlpha = 0;
+      sourceMesh.showBoundingBox = false;
+      sourceMesh.renderOutline = false;
+    });
+    this.worldColliders = [];
+  }
+
+  refreshWorldMeshBounds(root) {
+    root.computeWorldMatrix?.(true);
+    this.getNodeMeshes(root).forEach((mesh) => {
+      mesh.computeWorldMatrix?.(true);
+      if (typeof mesh.refreshBoundingInfo === "function") {
+        mesh.refreshBoundingInfo(true);
+      }
+    });
+  }
+
+  createWorldMeshCollider(mesh, index) {
+    if (!mesh || mesh.getTotalVertices() <= 0) {
+      return null;
     }
 
-    const material = new BABYLON.StandardMaterial("world-collider-debug-material", this.scene);
-    material.diffuseColor = new BABYLON.Color3(1, 0.42, 0.12);
-    material.emissiveColor = new BABYLON.Color3(0.65, 0.18, 0.04);
-    material.alpha = 0.35;
-    material.backFaceCulling = false;
-    this.worldColliderDebugMaterial = material;
-    return material;
+    mesh.metadata = {
+      ...(mesh.metadata ?? {}),
+      worldColliderIndex: index,
+    };
+    mesh.renderOverlay = this.worldCollidersVisible;
+    mesh.overlayColor = new BABYLON.Color3(1, 0.5, 0.1);
+    mesh.overlayAlpha = this.worldCollidersVisible ? 0.35 : 0;
+    mesh.showBoundingBox = this.worldCollidersVisible;
+    mesh.renderOutline = this.worldCollidersVisible;
+    mesh.outlineColor = new BABYLON.Color3(1, 0.52, 0.12);
+    mesh.outlineWidth = 0.08;
+
+    return {
+      aggregate: null,
+      sourceMesh: mesh,
+      sourceName: mesh.name || `mesh-${mesh.uniqueId}`,
+    };
   }
 
   setWorldColliderDebugVisible(visible) {
     this.worldCollidersVisible = visible;
-    this.worldColliders.forEach((collider) => {
-      collider.isVisible = visible;
-      collider.visibility = visible ? 0.35 : 0;
-      collider.renderOverlay = visible;
-      collider.overlayColor = new BABYLON.Color3(1, 0.45, 0.12);
-      collider.overlayAlpha = visible ? 0.55 : 0;
+    this.worldColliders.forEach(({ sourceMesh }) => {
+      sourceMesh.renderOverlay = visible;
+      sourceMesh.overlayAlpha = visible ? 0.35 : 0;
+      sourceMesh.showBoundingBox = visible;
+      sourceMesh.renderOutline = visible;
     });
   }
 
@@ -705,31 +862,48 @@ export class BabylonScene {
     return this.worldColliders.length;
   }
 
-  collectColliderTargets(root) {
-    const targets = this.getNodeMeshes(root)
-      .map((mesh) => ({
-        mesh,
-        bounds: this.getMeshBounds(mesh),
-      }))
-      .filter(({ bounds }) => this.isColliderCandidate(bounds))
-      .sort((a, b) => this.getBoundsVolume(b.bounds) - this.getBoundsVolume(a.bounds));
-
-    if (targets.length > 0) {
-      return targets;
-    }
-
-    return [];
+  getWorldColliderStats() {
+    return {
+      ...this.worldColliderStats,
+      failedMeshes: [...this.worldColliderStats.failedMeshes],
+    };
   }
 
-  isColliderCandidate(bounds) {
-    if (!this.areBoundsFinite(bounds)) {
-      return false;
-    }
+  getWorldImportStats() {
+    return {
+      ...this.worldImportStats,
+      meshNames: [...this.worldImportStats.meshNames],
+      rootNodeNames: [...this.worldImportStats.rootNodeNames],
+      rootNodeTypes: [...this.worldImportStats.rootNodeTypes],
+      sceneMeshNames: [...this.worldImportStats.sceneMeshNames],
+    };
+  }
 
-    const size = bounds.max.subtract(bounds.min);
-    return size.x >= WORLD_COLLIDER_MIN_SIZE
-      && size.y >= WORLD_COLLIDER_MIN_HEIGHT
-      && size.z >= WORLD_COLLIDER_MIN_SIZE;
+  getWorldMeshRuntimeBounds() {
+    return this.worldMeshes.map((mesh) => {
+      const bounds = mesh.getBoundingInfo().boundingBox;
+      const center = bounds.centerWorld;
+      const min = bounds.minimumWorld;
+      const max = bounds.maximumWorld;
+      return {
+        name: mesh.name || `mesh-${mesh.uniqueId}`,
+        center: {
+          x: Number(center.x.toFixed(2)),
+          y: Number(center.y.toFixed(2)),
+          z: Number(center.z.toFixed(2)),
+        },
+        min: {
+          x: Number(min.x.toFixed(2)),
+          y: Number(min.y.toFixed(2)),
+          z: Number(min.z.toFixed(2)),
+        },
+        max: {
+          x: Number(max.x.toFixed(2)),
+          y: Number(max.y.toFixed(2)),
+          z: Number(max.z.toFixed(2)),
+        },
+      };
+    });
   }
 
   areBoundsFinite(bounds) {
@@ -741,25 +915,15 @@ export class BabylonScene {
       && Number.isFinite(bounds.max.z);
   }
 
-  getBoundsVolume(bounds) {
-    const size = bounds.max.subtract(bounds.min);
-    return Math.max(size.x, 0) * Math.max(size.y, 0) * Math.max(size.z, 0);
-  }
-
   isRenderableWorldMesh(mesh) {
-    return mesh && mesh.isEnabled() && mesh.getTotalVertices() > 0;
-  }
-
-  getMeshBounds(mesh) {
-    const boundingBox = mesh.getBoundingInfo().boundingBox;
-    return {
-      min: boundingBox.minimumWorld.clone(),
-      max: boundingBox.maximumWorld.clone(),
-    };
+    return !!mesh
+      && mesh.isEnabled()
+      && mesh.getTotalVertices() > 0
+      && typeof mesh.getBoundingInfo === "function";
   }
 
   projectPositionToWorldSurface(position) {
-    if (!this.worldMeshes.length || !this.worldBounds) {
+    if (!this.worldSurfaceMeshes.length || !this.worldBounds) {
       return cloneVector(position);
     }
 
@@ -770,7 +934,7 @@ export class BabylonScene {
       new BABYLON.Vector3(0, -1, 0),
       rayLength,
     );
-    const hit = this.scene.pickWithRay(ray, (mesh) => this.worldMeshes.includes(mesh), false);
+    const hit = this.scene.pickWithRay(ray, (mesh) => this.worldSurfaceMeshes.includes(mesh), false);
 
     if (!hit?.hit || !hit.pickedPoint) {
       return cloneVector(position);
@@ -817,6 +981,8 @@ export class BabylonScene {
         animationGroups,
         animationRanges,
         lockedNodes,
+        collisionProxy: null,
+        verticalVelocity: 0,
       };
     }
 
@@ -838,12 +1004,14 @@ export class BabylonScene {
     mesh.parent = root;
     mesh.position.y = PLAYER_VISUAL_Y_OFFSET;
 
-    return {
-      root,
-      animationGroups: [],
-      animationRanges: [],
-      lockedNodes: [],
-    };
+      return {
+        root,
+        animationGroups: [],
+        animationRanges: [],
+        lockedNodes: [],
+        collisionProxy: null,
+        verticalVelocity: 0,
+      };
   }
 
   normalizeAvatar(root) {
@@ -874,10 +1042,14 @@ export class BabylonScene {
 
   computeHierarchyBounds(root) {
     const childMeshes = this.getNodeMeshes(root);
+    return this.computeMeshBounds(childMeshes);
+  }
+
+  computeMeshBounds(meshes) {
     let min = new BABYLON.Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
     let max = new BABYLON.Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
 
-    childMeshes.forEach((mesh) => {
+    meshes.forEach((mesh) => {
       const info = mesh.getHierarchyBoundingVectors(true);
       min = BABYLON.Vector3.Minimize(min, info.min);
       max = BABYLON.Vector3.Maximize(max, info.max);
@@ -1060,6 +1232,7 @@ export class BabylonScene {
 
   disposePlayerAvatar(avatar) {
     avatar.animationGroups.forEach((group) => group.dispose());
+    avatar.collisionProxy?.dispose(false, true);
     avatar.root.dispose(false, true);
   }
 

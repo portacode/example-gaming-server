@@ -19,6 +19,7 @@ const loadingCard = document.getElementById("loadingCard");
 const controlsCard = document.getElementById("controlsCard");
 const reconnectCard = document.getElementById("reconnectCard");
 const reconnectStatus = document.getElementById("reconnectStatus");
+const toggleCollidersButton = document.getElementById("toggleCollidersBtn");
 
 function log(message) {
   const line = document.createElement("div");
@@ -73,6 +74,54 @@ function setDebugOpen(open) {
   debugToggle.setAttribute("aria-expanded", String(open));
 }
 
+function syncColliderButton() {
+  const visible = sceneApp?.areWorldCollidersVisible?.() ?? false;
+  const count = sceneApp?.getWorldColliderCount?.() ?? 0;
+  toggleCollidersButton.textContent = visible
+    ? `Hide World Colliders (${count})`
+    : `Show World Colliders (${count})`;
+}
+
+function logWorldColliderStats() {
+  const stats = sceneApp?.getWorldColliderStats?.();
+  if (!stats) {
+    return;
+  }
+
+  log(`World collider stats: attempted=${stats.attempted}, created=${stats.created}, failed=${stats.failed}`);
+  if (stats.failedMeshes.length) {
+    log(`World collider failures: ${stats.failedMeshes.join(", ")}`);
+  }
+}
+
+function logWorldImportStats() {
+  const stats = sceneApp?.getWorldImportStats?.();
+  if (!stats) {
+    return;
+  }
+
+  log(`World import stats: rootNodes=${stats.rootNodeCount}, childMeshes=${stats.childMeshCount}, sceneMeshes=${stats.sceneMeshCount}`);
+  if (stats.rootNodeTypes.length) {
+    log(`World root nodes: ${stats.rootNodeTypes.map((type, index) => `${type}:${stats.rootNodeNames[index] ?? "unnamed"}`).join(", ")}`);
+  }
+  if (stats.meshNames.length) {
+    log(`World mesh names: ${stats.meshNames.join(", ")}`);
+  }
+  if (stats.sceneMeshNames.length) {
+    log(`Scene mesh names: ${stats.sceneMeshNames.join(", ")}`);
+  }
+}
+
+function logWorldRuntimeBounds() {
+  const bounds = sceneApp?.getWorldMeshRuntimeBounds?.() ?? [];
+  bounds.forEach((entry) => {
+    log(
+      `World mesh runtime bounds: ${entry.name} center=(${entry.center.x}, ${entry.center.y}, ${entry.center.z}) `
+      + `min=(${entry.min.x}, ${entry.min.y}, ${entry.min.z}) max=(${entry.max.x}, ${entry.max.y}, ${entry.max.z})`,
+    );
+  });
+}
+
 function setBootLoadingState() {
   setConnectionState({ state: "loading" });
 }
@@ -83,6 +132,8 @@ const sceneApp = new BabylonScene({
     network.sendAction({ type: "steer", heading });
   },
 });
+
+window.__sceneApp = sceneApp;
 
 const network = new GameNetworkClient({
   onRoomState: (state) => {
@@ -111,6 +162,10 @@ try {
 
 setConnectionState({ state: "disconnected" });
 setDebugOpen(false);
+syncColliderButton();
+logWorldImportStats();
+logWorldColliderStats();
+logWorldRuntimeBounds();
 
 debugToggle.addEventListener("click", () => {
   const open = debugPanel.dataset.open === "true";
@@ -119,6 +174,14 @@ debugToggle.addEventListener("click", () => {
 
 logoutButton.addEventListener("click", () => {
   network.leave();
+});
+
+toggleCollidersButton.addEventListener("click", () => {
+  const nextVisible = !(sceneApp.areWorldCollidersVisible?.() ?? false);
+  sceneApp.setWorldColliderDebugVisible(nextVisible);
+  syncColliderButton();
+  log(`${nextVisible ? "Showing" : "Hiding"} ${sceneApp.getWorldColliderCount?.() ?? 0} world collider mesh(es)`);
+  logWorldColliderStats();
 });
 
 connectButton.addEventListener("click", async () => {
