@@ -48,6 +48,7 @@ const CHARACTER_MODEL_URL = "/assets/characters/low_poly_humanoid_robot.glb";
 const WORLD_MODEL_URL = "/assets/world/low-poly_industrial_building.glb";
 const GROUND_DIFFUSE_URL = "/assets/world/textures/asphalt_01_diff_1k.jpg";
 const ROTATION_SMOOTHING = 12;
+const REMOTE_ROTATION_SPEED_THRESHOLD = 0.6;
 const WALK_TRIM_START_SECONDS = 1;
 const GROUND_SIZE = 2400;
 const GROUND_TEXTURE_REPEAT = 180;
@@ -1469,10 +1470,12 @@ export class BabylonScene {
     } else {
       const latest = state.snapshots[state.snapshots.length - 1];
       const velocity = latest ? new BABYLON.Vector3(latest.velocity.x, 0, latest.velocity.z) : null;
-      if (velocity && velocity.lengthSquared() > 0.0001) {
-        direction = velocity;
-      } else if (latest) {
+      const speedSquared = velocity ? velocity.lengthSquared() : 0;
+      if (latest) {
         direction = new BABYLON.Vector3(Math.cos(latest.heading), 0, Math.sin(latest.heading));
+      }
+      if (velocity && speedSquared > REMOTE_ROTATION_SPEED_THRESHOLD * REMOTE_ROTATION_SPEED_THRESHOLD) {
+        direction = velocity;
       }
     }
 
