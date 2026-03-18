@@ -1,0 +1,23 @@
+source_template: ubuntu
+name: Gaming Server
+hostname: example-gaming-server
+username: root
+resources:
+  disk_gib: 8
+  ram_mib: 2048
+  cpus: 1
+project_paths:
+  - ~/example-gaming-server
+automation_task:
+  task_name: Deploy Example Gaming Server
+  instructions:
+    - run: apt-get update
+    - run: apt-get install -y git curl ca-certificates docker.io docker-compose-plugin
+    - run: git clone https://github.com/portacode/example-gaming-server.git ~/example-gaming-server
+    - run: systemctl enable --now docker || service docker start || dockerd > /tmp/dockerd.log 2>&1 &
+    - run: cd ~/example-gaming-server && docker compose up -d --build
+    - wait_for: http://[exposed:5000]/
+  expose_ports:
+    - 5000
+  on_success: notify
+  on_failure: suggest_fixes
