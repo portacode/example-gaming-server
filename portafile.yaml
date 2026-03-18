@@ -3,9 +3,9 @@ name: Gaming Server
 hostname: example-gaming-server
 username: root
 resources:
-  disk_gib: 8
-  ram_mib: 2048
-  cpus: 1
+  disk_gib: 6
+  ram_mib: 1024
+  cpus: 0.2
 project_paths:
   - ~/example-gaming-server
 automation_task:
