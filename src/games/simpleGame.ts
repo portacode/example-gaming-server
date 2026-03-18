@@ -151,13 +151,13 @@ function ensurePlayerNumbers(state: SimpleGameState) {
 }
 
 function createSpawnPosition(index: number) {
-  const radius = 6;
-  const angle = (index / Math.max(1, PLAYERS_PER_GAME)) * Math.PI * 2;
+  const spacing = 4;
+  const centeredIndex = index - (PLAYERS_PER_GAME - 1) / 2;
 
   return {
-    x: Math.cos(angle) * radius,
+    x: centeredIndex * spacing,
     y: 1,
-    z: Math.sin(angle) * radius,
+    z: 0,
   };
 }
 
@@ -258,7 +258,7 @@ export const simpleGameDefinition: GameDefinition<
       playerNumber: spawnIndex + 1,
       username,
       connected: true,
-      heading: normalizeAngle(angleToHeading(spawnPosition)),
+      heading: 0,
       lastAcceptedMoveAt: Date.now(),
       velocity: {
         x: 0,
@@ -421,7 +421,3 @@ export const simpleGameDefinition: GameDefinition<
     return state.phase !== "active";
   },
 };
-
-function angleToHeading(position: { x: number; z: number }) {
-  return Math.atan2(position.z, position.x);
-}

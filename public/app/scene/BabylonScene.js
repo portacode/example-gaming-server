@@ -14,7 +14,7 @@ const SKY_PRESETS = {
 };
 
 export const WORLD_SKY_PRESET = "overcast-soil";
-const CAMERA_INITIAL_ALPHA = -Math.PI / 2;
+const CAMERA_INITIAL_ALPHA = Math.PI;
 const CAMERA_BETA_MIN = 0.62;
 const CAMERA_BETA_MAX = 1.85;
 const CAMERA_TRANSITION_BETA = 1.02;
@@ -134,6 +134,13 @@ function integrateMovement(snapshot, heading, deltaMs) {
     y: snapshot.position.y,
     z: snapshot.position.z + velocity.z * deltaSeconds,
   };
+}
+
+function getHeadingFromCamera(position, cameraPosition) {
+  return Math.atan2(
+    position.z - cameraPosition.z,
+    position.x - cameraPosition.x,
+  );
 }
 
 export class BabylonScene {
@@ -405,6 +412,9 @@ export class BabylonScene {
   integrateSelfCollisionTarget(state, deltaSeconds) {
     const currentPosition = state.renderedPosition ?? { x: 0, y: 1, z: 0 };
     const velocity = state.localVelocity ?? { x: 0, z: 0 };
+    if (this.lastHeading === null && this.camera) {
+      this.lastHeading = getHeadingFromCamera(currentPosition, this.camera.position);
+    }
     const heading = this.lastHeading ?? state.heading ?? 0;
     const forceX = Math.cos(heading) * MOVEMENT_FORCE;
     const forceZ = Math.sin(heading) * MOVEMENT_FORCE;
@@ -1584,11 +1594,7 @@ export class BabylonScene {
       return;
     }
 
-    const cameraPosition = this.camera.position;
-    const heading = Math.atan2(
-      this.selfPosition.z - cameraPosition.z,
-      this.selfPosition.x - cameraPosition.x,
-    );
+    const heading = getHeadingFromCamera(this.selfPosition, this.camera.position);
     const now = performance.now();
     const state = this.selfSessionId ? this.playerStates.get(this.selfSessionId) : null;
     const velocity = state?.localVelocity ?? state?.snapshots?.[state.snapshots.length - 1]?.velocity ?? { x: 0, z: 0 };
