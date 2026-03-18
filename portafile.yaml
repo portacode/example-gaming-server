@@ -12,9 +12,12 @@ automation_task:
   task_name: Deploy Example Gaming Server
   instructions:
     - run: apt-get update
-    - run: apt-get install -y git curl ca-certificates docker.io docker-compose-plugin
+    - run: apt-get install -y git curl ca-certificates
+    - run: curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+    - run: sh /tmp/get-docker.sh
     - run: git clone https://github.com/portacode/example-gaming-server.git ~/example-gaming-server
     - run: systemctl enable --now docker || service docker start || dockerd > /tmp/dockerd.log 2>&1 &
+    - run: until docker info >/dev/null 2>&1; do sleep 1; done
     - run: cd ~/example-gaming-server && docker compose up -d --build
     - wait_for: http://[exposed:5000]/
   expose_ports:

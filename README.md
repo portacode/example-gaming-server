@@ -95,7 +95,7 @@ The included sky presets are documented in `public/assets/world/sky/README.md`.
 
 ### Portacode
 
-This repo includes a Portacode CI/CD [`portafile.yaml`](/home/user/gaming/portafile.yaml) that deploys the repository using the existing [`docker-compose.yml`](/home/user/gaming/docker-compose.yml) stack. The workflow provisions an Ubuntu device, installs Docker plus the Compose plugin, clones this repository, runs `docker compose up -d --build`, and waits for port `5000` to respond.
+This repo includes a Portacode CI/CD [`portafile.yaml`](/home/user/gaming/portafile.yaml) that deploys the repository using the existing [`docker-compose.yml`](/home/user/gaming/docker-compose.yml) stack. The workflow provisions an Ubuntu device, installs Docker using Docker's official `get.docker.com` convenience script, clones this repository, runs `docker compose up -d --build`, and waits for port `5000` to respond.
 
 Use the deploy button above, or open this direct Portacode URL:
 
