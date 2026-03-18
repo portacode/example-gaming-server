@@ -2,7 +2,9 @@
 
 A small but reusable multiplayer game server starter for students, prototypes, and early-stage teams. It combines a TypeScript Colyseus backend, a Babylon.js browser client, and a modular game-definition layer so you can ship a playable demo quickly without painting yourself into a corner.
 
-[![Deploy with Portacode](https://img.shields.io/badge/Deploy%20with-Portacode-c95d2a?style=for-the-badge)](https://portacode.com/dashboard/?portafile=https%3A%2F%2Fraw.githubusercontent.com%2Fportacode%2Fexample-gaming-server%2Fmain%2Fportafile.yaml)
+<a href="https://portacode.com/dashboard/?portafile=https%3A%2F%2Fraw.githubusercontent.com%2Fportacode%2Fexample-gaming-server%2Fmain%2Fportafile.yaml" target="_blank" rel="noopener noreferrer">
+  <img src="https://img.shields.io/badge/Deploy%20with-Portacode-c95d2a?style=for-the-badge" alt="Deploy with Portacode">
+</a>
 
 ## What is in this repo
 
