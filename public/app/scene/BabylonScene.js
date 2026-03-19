@@ -40,6 +40,9 @@ const RUN_MOVEMENT_FORCE = 44;
 const MOVEMENT_DRAG = 4.5;
 const WALK_SPEED = 2.4;
 const RUN_SPEED = 18;
+const TOUCH_JOYSTICK_MAX_PULL = 42;
+const TOUCH_WALK_THRESHOLD = 0.22;
+const TOUCH_RUN_THRESHOLD = 0.58;
 const PLAYER_VISUAL_Y_OFFSET = 1;
 const TARGET_AVATAR_HEIGHT = 2.2;
 const PLAYER_LABEL_Y_OFFSET = 3.2;
@@ -226,12 +229,20 @@ export class BabylonScene {
     this.objectUrls = [];
     this.lastActiveLoadLabel = "Starting downloads...";
     this.inputState = {
+      keyboardWalk: false,
+      keyboardRun: false,
+      touchWalk: false,
+      touchRun: false,
       walk: false,
       run: false,
       jumpQueued: false,
     };
     this.boundKeyDown = null;
     this.boundKeyUp = null;
+    this.touchControls = null;
+    this.touchJoystickState = {
+      activePointerId: null,
+    };
   }
 
   async init() {
@@ -255,6 +266,7 @@ export class BabylonScene {
       this.engine.resize();
     });
     this.attachInputListeners();
+    this.syncTouchControlsVisibility();
   }
 
   applyView(view) {
@@ -1770,6 +1782,82 @@ export class BabylonScene {
     return true;
   }
 
+  updateMovementInputState() {
+    this.inputState.walk = Boolean(this.inputState.keyboardWalk || this.inputState.touchWalk);
+    this.inputState.run = Boolean(this.inputState.keyboardRun || this.inputState.touchRun);
+  }
+
+  syncTouchControlsVisibility() {
+    const controls = this.getTouchControls();
+    if (!controls?.root) {
+      return;
+    }
+
+    const touchCapable = window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;
+    controls.root.dataset.visible = String(touchCapable);
+    if (!touchCapable) {
+      this.resetTouchMovement();
+    }
+  }
+
+  getTouchControls() {
+    if (this.touchControls) {
+      return this.touchControls;
+    }
+
+    const root = document.getElementById("touchControls");
+    const joystick = document.getElementById("touchJoystick");
+    const knob = document.getElementById("touchJoystickKnob");
+    const jumpButton = document.getElementById("touchJumpBtn");
+    this.touchControls = {
+      root,
+      joystick,
+      knob,
+      jumpButton,
+    };
+    return this.touchControls;
+  }
+
+  resetTouchMovement() {
+    this.touchJoystickState.activePointerId = null;
+    this.inputState.touchWalk = false;
+    this.inputState.touchRun = false;
+    this.updateMovementInputState();
+    this.renderTouchJoystick(0, 0);
+  }
+
+  renderTouchJoystick(offsetX, offsetY) {
+    const controls = this.getTouchControls();
+    if (!controls?.knob) {
+      return;
+    }
+
+    controls.knob.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+  }
+
+  updateTouchMovementFromEvent(event) {
+    const controls = this.getTouchControls();
+    if (!controls?.joystick) {
+      return;
+    }
+
+    const rect = controls.joystick.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const rawX = event.clientX - centerX;
+    const rawY = event.clientY - centerY;
+    const distance = Math.hypot(rawX, rawY);
+    const scale = distance > TOUCH_JOYSTICK_MAX_PULL ? TOUCH_JOYSTICK_MAX_PULL / distance : 1;
+    const offsetX = rawX * scale;
+    const offsetY = rawY * scale;
+    const upwardPull = Math.max(0, -offsetY / TOUCH_JOYSTICK_MAX_PULL);
+
+    this.renderTouchJoystick(offsetX, offsetY);
+    this.inputState.touchWalk = upwardPull >= TOUCH_WALK_THRESHOLD;
+    this.inputState.touchRun = upwardPull >= TOUCH_RUN_THRESHOLD;
+    this.updateMovementInputState();
+  }
+
   attachInputListeners() {
     if (this.boundKeyDown || this.boundKeyUp) {
       return;
@@ -1782,9 +1870,9 @@ export class BabylonScene {
 
       const key = event.key.toLowerCase();
       if (key === "z") {
-        this.inputState.walk = true;
+        this.inputState.keyboardWalk = true;
       } else if (key === "x") {
-        this.inputState.run = true;
+        this.inputState.keyboardRun = true;
       } else if (key === "c") {
         if (!this.triggerLocalJump()) {
           return;
@@ -1793,23 +1881,72 @@ export class BabylonScene {
         return;
       }
 
+      this.updateMovementInputState();
       event.preventDefault();
     };
 
     this.boundKeyUp = (event) => {
       const key = event.key.toLowerCase();
       if (key === "z") {
-        this.inputState.walk = false;
+        this.inputState.keyboardWalk = false;
       } else if (key === "x") {
-        this.inputState.run = false;
+        this.inputState.keyboardRun = false;
       } else {
         return;
       }
 
+      this.updateMovementInputState();
       event.preventDefault();
     };
 
     window.addEventListener("keydown", this.boundKeyDown);
     window.addEventListener("keyup", this.boundKeyUp);
+
+    const controls = this.getTouchControls();
+    if (!controls?.joystick || !controls?.jumpButton) {
+      return;
+    }
+
+    controls.joystick.addEventListener("pointerdown", (event) => {
+      this.touchJoystickState.activePointerId = event.pointerId;
+      controls.joystick.setPointerCapture?.(event.pointerId);
+      this.updateTouchMovementFromEvent(event);
+      event.preventDefault();
+    });
+
+    controls.joystick.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== this.touchJoystickState.activePointerId) {
+        return;
+      }
+
+      this.updateTouchMovementFromEvent(event);
+      event.preventDefault();
+    });
+
+    const releaseJoystick = (event) => {
+      if (event.pointerId !== this.touchJoystickState.activePointerId) {
+        return;
+      }
+
+      this.resetTouchMovement();
+      controls.joystick.releasePointerCapture?.(event.pointerId);
+      event.preventDefault();
+    };
+
+    controls.joystick.addEventListener("pointerup", releaseJoystick);
+    controls.joystick.addEventListener("pointercancel", releaseJoystick);
+    controls.joystick.addEventListener("lostpointercapture", () => {
+      this.resetTouchMovement();
+    });
+    controls.jumpButton.addEventListener("pointerdown", (event) => {
+      this.triggerLocalJump();
+      event.preventDefault();
+    });
+    window.addEventListener("blur", () => {
+      this.resetTouchMovement();
+    });
+    window.addEventListener("resize", () => {
+      this.syncTouchControlsVisibility();
+    });
   }
 }

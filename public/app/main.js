@@ -24,6 +24,50 @@ const controlsCard = document.getElementById("controlsCard");
 const reconnectCard = document.getElementById("reconnectCard");
 const reconnectStatus = document.getElementById("reconnectStatus");
 const toggleCollidersButton = document.getElementById("toggleCollidersBtn");
+const viewportMeta = document.querySelector('meta[name="viewport"]');
+
+function installViewportLock() {
+  if (viewportMeta) {
+    viewportMeta.setAttribute(
+      "content",
+      "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=overlays-content",
+    );
+  }
+
+  const syncViewportHeight = () => {
+    const nextHeight = window.visualViewport?.height ?? window.innerHeight;
+    document.documentElement.style.setProperty("--app-height", `${Math.round(nextHeight)}px`);
+  };
+
+  let lastTouchEndAt = 0;
+  document.addEventListener("gesturestart", (event) => {
+    event.preventDefault();
+  }, { passive: false });
+  document.addEventListener("gesturechange", (event) => {
+    event.preventDefault();
+  }, { passive: false });
+  document.addEventListener("gestureend", (event) => {
+    event.preventDefault();
+  }, { passive: false });
+  document.addEventListener("touchmove", (event) => {
+    if (event.touches.length > 1) {
+      event.preventDefault();
+    }
+  }, { passive: false });
+  document.addEventListener("touchend", (event) => {
+    const now = Date.now();
+    if (now - lastTouchEndAt < 300) {
+      event.preventDefault();
+    }
+    lastTouchEndAt = now;
+  }, { passive: false });
+
+  syncViewportHeight();
+  window.addEventListener("resize", syncViewportHeight);
+  window.addEventListener("orientationchange", syncViewportHeight);
+  window.visualViewport?.addEventListener("resize", syncViewportHeight);
+  window.visualViewport?.addEventListener("scroll", syncViewportHeight);
+}
 
 function log(message) {
   const line = document.createElement("div");
@@ -196,6 +240,7 @@ const network = new GameNetworkClient({
 });
 
 setBootLoadingState();
+installViewportLock();
 updateLoadingProgress({
   percent: 0,
   activeLabel: "Starting downloads...",
