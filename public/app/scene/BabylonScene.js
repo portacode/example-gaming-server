@@ -1513,21 +1513,15 @@ export class BabylonScene {
     }
 
     const latest = state.snapshots[state.snapshots.length - 1];
-    const velocity = state.localVelocity ?? latest?.velocity ?? { x: 0, z: 0 };
-    const speed = Math.hypot(velocity.x, velocity.z);
     const movementMode = state.movementMode ?? latest?.movementMode ?? "idle";
     const jumping = Boolean(state.jumping ?? latest?.jumping);
     let activeGroup = avatar.animationGroups.idle ?? avatar.animationGroups.all[0];
 
     if (jumping && avatar.animationGroups.jump) {
       activeGroup = avatar.animationGroups.jump;
-    } else if (movementMode === "run" && speed > WALK_ANIMATION_SPEED_THRESHOLD) {
+    } else if (movementMode === "run") {
       activeGroup = avatar.animationGroups.run ?? avatar.animationGroups.walk ?? activeGroup;
-    } else if (movementMode === "walk" && speed > WALK_ANIMATION_SPEED_THRESHOLD) {
-      activeGroup = avatar.animationGroups.walk ?? activeGroup;
-    } else if (speed > RUN_ANIMATION_SPEED_THRESHOLD) {
-      activeGroup = avatar.animationGroups.run ?? avatar.animationGroups.walk ?? activeGroup;
-    } else if (speed > WALK_ANIMATION_SPEED_THRESHOLD) {
+    } else if (movementMode === "walk") {
       activeGroup = avatar.animationGroups.walk ?? activeGroup;
     }
 
