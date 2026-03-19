@@ -49,12 +49,12 @@ const PLAYER_COLLIDER_RADIUS = 0.35;
 const PLAYER_COLLIDER_HEIGHT = 1.8;
 const PLAYER_GRAVITY = 28;
 const PLAYER_MAX_FALL_SPEED = 24;
-const CHARACTER_MODEL_URL = "/assets/characters/low_poly_humanoid_robot.glb";
+const CHARACTER_MODEL_URL = "/assets/characters/Character.glb";
 const WORLD_MODEL_URL = "/assets/world/low-poly_industrial_building.glb";
 const GROUND_DIFFUSE_URL = "/assets/world/textures/asphalt_01_diff_1k.jpg";
 const ROTATION_SMOOTHING = 12;
 const REMOTE_ROTATION_SPEED_THRESHOLD = 0.6;
-const WALK_TRIM_START_SECONDS = 1;
+const WALK_ANIMATION_SPEED_THRESHOLD = 0.15;
 const GROUND_SIZE = 2400;
 const GROUND_TEXTURE_REPEAT = 180;
 const DEFAULT_UNKNOWN_ASSET_WEIGHT = 1024 * 1024;
@@ -1246,8 +1246,8 @@ export class BabylonScene {
       this.tintAvatar(instance, isSelf);
       const animationGroups = this.selectAvatarAnimationGroups(instance.animationGroups);
       const lockedNodes = this.captureLockedAnimationNodes(instance);
-      const animationRanges = animationGroups.map((group) => this.getAnimationPlaybackRange(group));
-      animationGroups.forEach((group, index) => {
+      const animationRanges = animationGroups.all.map((group) => this.getAnimationPlaybackRange(group));
+      animationGroups.all.forEach((group, index) => {
         const range = animationRanges[index];
         group.targetedAnimations.forEach(({ animation }) => {
           animation.loopMode = BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE;
@@ -1255,7 +1255,6 @@ export class BabylonScene {
         group.normalize(range.from, range.to);
         group.stop();
         group.goToFrame(range.from);
-        group.play(true);
         group.speedRatio = 1;
       });
 
@@ -1289,16 +1288,20 @@ export class BabylonScene {
     mesh.parent = root;
     mesh.position.y = PLAYER_VISUAL_Y_OFFSET;
 
-      return {
-        root,
-        animationGroups: [],
-        animationRanges: [],
-        lockedNodes: [],
-        collisionProxy: null,
-        verticalVelocity: 0,
-        labelPlane: this.createPlayerLabelPlane(root),
-        labelText: "",
-      };
+    return {
+      root,
+      animationGroups: {
+        all: [],
+        idle: null,
+        walk: null,
+      },
+      animationRanges: [],
+      lockedNodes: [],
+      collisionProxy: null,
+      verticalVelocity: 0,
+      labelPlane: this.createPlayerLabelPlane(root),
+      labelText: "",
+    };
   }
 
   normalizeAvatar(root) {
@@ -1388,7 +1391,14 @@ export class BabylonScene {
 
   selectAvatarAnimationGroups(animationGroups) {
     const motionGroups = animationGroups.filter((group) => !/t[\s_-]*pose/i.test(group.name ?? ""));
-    return motionGroups.length ? motionGroups : animationGroups;
+    const availableGroups = motionGroups.length ? motionGroups : animationGroups;
+    const findGroup = (pattern) => availableGroups.find((group) => pattern.test(group.name ?? ""));
+
+    return {
+      all: availableGroups,
+      idle: findGroup(/\bidle\b/i) ?? availableGroups[0] ?? null,
+      walk: findGroup(/\bwalk(?:ing)?\b/i) ?? findGroup(/\bwaking\b/i) ?? availableGroups[0] ?? null,
+    };
   }
 
   captureLockedAnimationNodes(instance) {
@@ -1418,15 +1428,12 @@ export class BabylonScene {
   getAnimationPlaybackRange(group) {
     let from = Number.POSITIVE_INFINITY;
     let to = Number.NEGATIVE_INFINITY;
-    let maxFramePerSecond = 0;
-
     group.targetedAnimations.forEach((targetedAnimation) => {
       const keys = targetedAnimation.animation.getKeys();
       if (!keys.length) {
         return;
       }
 
-      maxFramePerSecond = Math.max(maxFramePerSecond, targetedAnimation.animation.framePerSecond || 0);
       from = Math.min(from, keys[0].frame);
       to = Math.max(to, keys[keys.length - 1].frame);
     });
@@ -1438,28 +1445,36 @@ export class BabylonScene {
       };
     }
 
-    if (/walk/i.test(group.name ?? "") && maxFramePerSecond > 0) {
-      const trimmedFrom = from + WALK_TRIM_START_SECONDS * maxFramePerSecond;
-      if (trimmedFrom < to) {
-        from = trimmedFrom;
-      }
-    }
-
     return { from, to };
   }
 
   updateAvatarAnimation(avatar, state) {
-    if (!avatar.animationGroups.length) {
+    if (!avatar.animationGroups?.all?.length) {
       return;
     }
 
-    avatar.animationGroups.forEach((group, index) => {
+    const latest = state.snapshots[state.snapshots.length - 1];
+    const velocity = state.localVelocity ?? latest?.velocity ?? { x: 0, z: 0 };
+    const speed = Math.hypot(velocity.x, velocity.z);
+    const activeGroup = speed > WALK_ANIMATION_SPEED_THRESHOLD
+      ? (avatar.animationGroups.walk ?? avatar.animationGroups.idle ?? avatar.animationGroups.all[0])
+      : (avatar.animationGroups.idle ?? avatar.animationGroups.walk ?? avatar.animationGroups.all[0]);
+
+    avatar.animationGroups.all.forEach((group, index) => {
       const range = avatar.animationRanges[index] ?? { from: group.from, to: group.to };
-      if (!group.isPlaying) {
-        group.goToFrame(range.from);
-        group.play(true);
+      if (group === activeGroup) {
+        if (!group.isPlaying) {
+          group.goToFrame(range.from);
+          group.play(true);
+        }
+        group.speedRatio = 1;
+        return;
       }
-      group.speedRatio = 1;
+
+      if (group.isPlaying) {
+        group.stop();
+      }
+      group.goToFrame(range.from);
     });
 
     avatar.lockedNodes.forEach(({ node, position, rotationQuaternion, rotation, scaling }) => {
@@ -1582,7 +1597,7 @@ export class BabylonScene {
   }
 
   disposePlayerAvatar(avatar) {
-    avatar.animationGroups.forEach((group) => group.dispose());
+    avatar.animationGroups?.all?.forEach((group) => group.dispose());
     avatar.collisionProxy?.dispose(false, true);
     avatar.labelPlane?.material?.dispose(false, true);
     avatar.labelPlane?.dispose(false, true);
