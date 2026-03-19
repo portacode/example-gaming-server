@@ -58,6 +58,9 @@ const PLAYER_COLLIDER_HEIGHT = 1.8;
 const PLAYER_GRAVITY = 28;
 const PLAYER_JUMP_SPEED = 10;
 const PLAYER_MAX_FALL_SPEED = 24;
+const GROUND_SUPPORT_PROBE_UP = 0.35;
+const GROUND_SUPPORT_PROBE_DOWN = 0.55;
+const GROUND_SUPPORT_LANDING_TOLERANCE = 0.12;
 const JUMP_REARM_COOLDOWN_MS = 2000;
 const CHARACTER_MODEL_URL = "/assets/characters/Character.glb";
 const WORLD_MODEL_URL = "/assets/world/low-poly_industrial_building.glb";
@@ -607,10 +610,6 @@ export class BabylonScene {
     );
     const requestedHorizontalDelta = horizontalDelta.clone();
 
-    avatar.verticalVelocity = Math.max(
-      avatar.verticalVelocity - PLAYER_GRAVITY * deltaSeconds,
-      -PLAYER_MAX_FALL_SPEED,
-    );
     const wantsJump = avatar.isGrounded && this.inputState.jumpQueued;
     if (wantsJump) {
       avatar.verticalVelocity = PLAYER_JUMP_SPEED;
@@ -620,11 +619,10 @@ export class BabylonScene {
     }
 
     const previousX = collisionProxy.position.x;
-    const previousY = collisionProxy.position.y;
     const previousZ = collisionProxy.position.z;
     collisionProxy.moveWithCollisions(new BABYLON.Vector3(
       requestedHorizontalDelta.x,
-      avatar.verticalVelocity * deltaSeconds,
+      0,
       requestedHorizontalDelta.z,
     ));
 
@@ -633,14 +631,46 @@ export class BabylonScene {
       0,
       collisionProxy.position.z - previousZ,
     );
-    const deltaY = collisionProxy.position.y - previousY;
-    if (deltaY >= -0.001 && avatar.verticalVelocity < 0) {
+
+    const supportAfterHorizontalMove = wantsJump
+      ? null
+      : this.findGroundSupport(collisionProxy.position, GROUND_SUPPORT_PROBE_DOWN);
+    if (supportAfterHorizontalMove && avatar.verticalVelocity <= 0) {
+      collisionProxy.position.y = supportAfterHorizontalMove.y;
       avatar.verticalVelocity = 0;
       avatar.isGrounded = true;
       state.jumping = false;
       state.jumpRequested = false;
-    } else if (Math.abs(deltaY) > 0.001 || Math.abs(avatar.verticalVelocity) > 0.001) {
+    } else {
+      avatar.verticalVelocity = Math.max(
+        avatar.verticalVelocity - PLAYER_GRAVITY * deltaSeconds,
+        -PLAYER_MAX_FALL_SPEED,
+      );
       avatar.isGrounded = false;
+
+      const previousY = collisionProxy.position.y;
+      collisionProxy.moveWithCollisions(new BABYLON.Vector3(
+        0,
+        avatar.verticalVelocity * deltaSeconds,
+        0,
+      ));
+
+      const landedSupport = avatar.verticalVelocity <= 0
+        ? this.findGroundSupport(
+          collisionProxy.position,
+          GROUND_SUPPORT_PROBE_DOWN + GROUND_SUPPORT_LANDING_TOLERANCE,
+        )
+        : null;
+
+      if (landedSupport && collisionProxy.position.y <= landedSupport.y + GROUND_SUPPORT_LANDING_TOLERANCE) {
+        collisionProxy.position.y = landedSupport.y;
+        avatar.verticalVelocity = 0;
+        avatar.isGrounded = true;
+        state.jumping = false;
+        state.jumpRequested = false;
+      } else if (Math.abs(collisionProxy.position.y - previousY) > 0.0001 || Math.abs(avatar.verticalVelocity) > 0.0001) {
+        avatar.isGrounded = false;
+      }
     }
 
     if (deltaSeconds > 0) {
@@ -690,6 +720,30 @@ export class BabylonScene {
     avatar.collisionProxy = proxy;
     avatar.verticalVelocity = 0;
     return proxy;
+  }
+
+  findGroundSupport(position, maxDropDistance = GROUND_SUPPORT_PROBE_DOWN) {
+    if (!this.worldSurfaceMeshes.length) {
+      return null;
+    }
+
+    const rayLength = GROUND_SUPPORT_PROBE_UP + Math.max(maxDropDistance, 0);
+    const ray = new BABYLON.Ray(
+      new BABYLON.Vector3(position.x, position.y + GROUND_SUPPORT_PROBE_UP, position.z),
+      new BABYLON.Vector3(0, -1, 0),
+      rayLength,
+    );
+    const hit = this.scene.pickWithRay(ray, (mesh) => this.worldSurfaceMeshes.includes(mesh), false);
+
+    if (!hit?.hit || !hit.pickedPoint) {
+      return null;
+    }
+
+    return {
+      x: position.x,
+      y: hit.pickedPoint.y,
+      z: position.z,
+    };
   }
 
   async enablePhysics() {
