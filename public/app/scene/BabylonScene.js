@@ -43,6 +43,9 @@ const RUN_SPEED = 18;
 const TOUCH_JOYSTICK_MAX_PULL = 42;
 const TOUCH_WALK_THRESHOLD = 0.22;
 const TOUCH_RUN_THRESHOLD = 0.58;
+const TOUCH_TURN_DEADZONE = 0.08;
+const TOUCH_SPIN_EPSILON = 0.04;
+const TOUCH_HEADING_TURN_SPEED = 5.4;
 const PLAYER_VISUAL_Y_OFFSET = 1;
 const TARGET_AVATAR_HEIGHT = 2.2;
 const PLAYER_LABEL_Y_OFFSET = 3.2;
@@ -171,6 +174,26 @@ function getHeadingFromCamera(position, cameraPosition) {
   );
 }
 
+function getAngleDelta(target, current) {
+  return Math.atan2(Math.sin(target - current), Math.cos(target - current));
+}
+
+function clampMagnitude(value, min = -1, max = 1) {
+  return BABYLON.Scalar.Clamp(value, min, max);
+}
+
+function getTouchMovementMode(forwardAmount) {
+  if (forwardAmount >= TOUCH_RUN_THRESHOLD) {
+    return "run";
+  }
+
+  if (forwardAmount >= TOUCH_WALK_THRESHOLD) {
+    return "walk";
+  }
+
+  return "idle";
+}
+
 export class BabylonScene {
   constructor({ canvas, onMovementChange, onLoadProgress }) {
     this.canvas = canvas;
@@ -185,6 +208,7 @@ export class BabylonScene {
     this.selfSessionId = null;
     this.lastHeading = null;
     this.lastMovementSentAt = 0;
+    this.lastSentHeading = null;
     this.lastSentPosition = null;
     this.lastSentVelocity = null;
     this.lastSentMovementMode = "idle";
@@ -235,6 +259,9 @@ export class BabylonScene {
       touchRun: false,
       walk: false,
       run: false,
+      touchActive: false,
+      touchTurn: 0,
+      touchForward: 0,
       jumpQueued: false,
     };
     this.boundKeyDown = null;
@@ -483,13 +510,16 @@ export class BabylonScene {
   integrateSelfCollisionTarget(state, deltaSeconds) {
     const currentPosition = state.renderedPosition ?? { x: 0, y: 1, z: 0 };
     const velocity = state.localVelocity ?? { x: 0, z: 0 };
-    const movementMode = getMovementMode(this.inputState);
+    const movementIntent = this.resolveMovementIntent(state, currentPosition, deltaSeconds);
+    const movementMode = movementIntent.mode;
     const movementForce = getForceForMode(movementMode);
     const targetSpeed = getSpeedForMode(movementMode);
     if (this.lastHeading === null && this.camera) {
       this.lastHeading = getHeadingFromCamera(currentPosition, this.camera.position);
     }
-    const heading = this.lastHeading ?? state.heading ?? 0;
+    const heading = movementIntent.heading;
+    state.heading = heading;
+    this.lastHeading = heading;
     if (targetSpeed > 0 && movementForce > 0) {
       const forceX = Math.cos(heading) * movementForce;
       const forceZ = Math.sin(heading) * movementForce;
@@ -512,6 +542,39 @@ export class BabylonScene {
       x: currentPosition.x + velocity.x * deltaSeconds,
       y: currentPosition.y,
       z: currentPosition.z + velocity.z * deltaSeconds,
+    };
+  }
+
+  resolveMovementIntent(state, currentPosition, deltaSeconds) {
+    const fallbackHeading = this.lastHeading
+      ?? state.heading
+      ?? (this.camera ? getHeadingFromCamera(currentPosition, this.camera.position) : 0);
+
+    if (!this.inputState.touchActive || !this.camera) {
+      return {
+        heading: this.inputState.keyboardWalk || this.inputState.keyboardRun
+          ? getHeadingFromCamera(currentPosition, this.camera.position)
+          : fallbackHeading,
+        mode: getMovementMode(this.inputState),
+      };
+    }
+
+    const forwardInput = clampMagnitude(this.inputState.touchForward);
+    const turnInput = clampMagnitude(this.inputState.touchTurn);
+    const desiredHeading = getHeadingFromCamera(currentPosition, this.camera.position) + Math.atan2(-turnInput, forwardInput);
+    const turnAmount = Math.min(1, Math.hypot(turnInput, forwardInput));
+    const maxTurnStep = TOUCH_HEADING_TURN_SPEED * Math.max(turnAmount, Math.abs(turnInput)) * deltaSeconds;
+    const headingDelta = getAngleDelta(desiredHeading, fallbackHeading);
+    const heading = fallbackHeading + BABYLON.Scalar.Clamp(headingDelta, -maxTurnStep, maxTurnStep);
+    const forwardAmount = Math.abs(forwardInput);
+    const mode = Math.abs(forwardInput) <= TOUCH_SPIN_EPSILON
+      && Math.abs(turnInput) > TOUCH_TURN_DEADZONE
+      ? "idle"
+      : getTouchMovementMode(forwardAmount);
+
+    return {
+      heading,
+      mode,
     };
   }
 
@@ -1601,11 +1664,11 @@ export class BabylonScene {
   updateAvatarOrientation(avatar, state, deltaSeconds, isSelf) {
     let direction = null;
 
-    if (isSelf && this.camera && this.selfPosition) {
+    if (isSelf) {
       direction = new BABYLON.Vector3(
-        this.selfPosition.x - this.camera.position.x,
+        Math.cos(state.heading ?? this.lastHeading ?? 0),
         0,
-        this.selfPosition.z - this.camera.position.z,
+        Math.sin(state.heading ?? this.lastHeading ?? 0),
       );
     } else {
       const latest = state.snapshots[state.snapshots.length - 1];
@@ -1714,15 +1777,16 @@ export class BabylonScene {
       return;
     }
 
-    const heading = getHeadingFromCamera(this.selfPosition, this.camera.position);
     const now = performance.now();
     const state = this.selfSessionId ? this.playerStates.get(this.selfSessionId) : null;
     const velocity = state?.localVelocity ?? state?.snapshots?.[state.snapshots.length - 1]?.velocity ?? { x: 0, z: 0 };
-    const movementMode = getMovementMode(this.inputState);
+    const intent = this.resolveMovementIntent(state ?? {}, this.selfPosition, Math.min(this.engine.getDeltaTime() / 1000, 0.05));
+    const heading = intent.heading;
+    const movementMode = intent.mode;
     const jumping = Boolean(state?.jumping);
 
-    if (this.lastHeading !== null) {
-      const delta = Math.atan2(Math.sin(heading - this.lastHeading), Math.cos(heading - this.lastHeading));
+    if (this.lastSentHeading !== null) {
+      const delta = getAngleDelta(heading, this.lastSentHeading);
       const speedDelta = Math.hypot(
         velocity.x - (this.lastSentVelocity?.x ?? 0),
         velocity.z - (this.lastSentVelocity?.z ?? 0),
@@ -1742,6 +1806,7 @@ export class BabylonScene {
     }
 
     this.lastHeading = heading;
+    this.lastSentHeading = heading;
     this.lastMovementSentAt = now;
     this.lastSentVelocity = { x: velocity.x, z: velocity.z };
     this.lastSentPosition = cloneVector(this.selfPosition);
@@ -1820,6 +1885,9 @@ export class BabylonScene {
 
   resetTouchMovement() {
     this.touchJoystickState.activePointerId = null;
+    this.inputState.touchActive = false;
+    this.inputState.touchTurn = 0;
+    this.inputState.touchForward = 0;
     this.inputState.touchWalk = false;
     this.inputState.touchRun = false;
     this.updateMovementInputState();
@@ -1850,9 +1918,14 @@ export class BabylonScene {
     const scale = distance > TOUCH_JOYSTICK_MAX_PULL ? TOUCH_JOYSTICK_MAX_PULL / distance : 1;
     const offsetX = rawX * scale;
     const offsetY = rawY * scale;
+    const normalizedX = clampMagnitude(offsetX / TOUCH_JOYSTICK_MAX_PULL);
+    const normalizedY = clampMagnitude(offsetY / TOUCH_JOYSTICK_MAX_PULL);
     const upwardPull = Math.max(0, -offsetY / TOUCH_JOYSTICK_MAX_PULL);
 
     this.renderTouchJoystick(offsetX, offsetY);
+    this.inputState.touchActive = distance > TOUCH_JOYSTICK_MAX_PULL * TOUCH_TURN_DEADZONE;
+    this.inputState.touchTurn = normalizedX;
+    this.inputState.touchForward = -normalizedY;
     this.inputState.touchWalk = upwardPull >= TOUCH_WALK_THRESHOLD;
     this.inputState.touchRun = upwardPull >= TOUCH_RUN_THRESHOLD;
     this.updateMovementInputState();
