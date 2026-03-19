@@ -262,6 +262,11 @@ export class BabylonScene {
     }
 
     this.recordSnapshotTiming(view.serverTime);
+    if (view.self && this.camera) {
+      this.selfSessionId = view.self.sessionId;
+    } else {
+      this.selfSessionId = null;
+    }
 
     const visibleIds = new Set(view.visiblePlayers.map((player) => player.sessionId));
 
@@ -284,9 +289,7 @@ export class BabylonScene {
       this.recordPlayerSnapshot(player.sessionId, player, view.serverTime);
     });
 
-    if (view.self && this.camera) {
-      this.selfSessionId = view.self.sessionId;
-    } else {
+    if (!view.self || !this.camera) {
       this.selfSessionId = null;
       this.selfPosition = null;
       this.lastHeading = null;
@@ -350,20 +353,30 @@ export class BabylonScene {
         localVelocity: cloneVelocity(player.velocity),
         movementMode: player.movementMode ?? "idle",
         jumping: Boolean(player.jumping),
+        jumpRequested: false,
       };
       this.playerStates.set(sessionId, state);
     }
 
+    const isSelf = sessionId === this.selfSessionId;
+    const serverJumping = Boolean(player.jumping);
     state.heading = player.heading;
     state.movementMode = player.movementMode ?? "idle";
-    state.jumping = Boolean(player.jumping);
+    if (isSelf) {
+      if (!(state.jumping && !serverJumping)) {
+        state.jumping = serverJumping;
+      }
+      state.jumpRequested = false;
+    } else {
+      state.jumping = serverJumping;
+    }
     state.snapshots.push({
       serverTime,
       heading: player.heading,
       velocity: cloneVelocity(player.velocity),
       position: cloneVector(player.position),
       movementMode: player.movementMode ?? "idle",
-      jumping: Boolean(player.jumping),
+      jumping: serverJumping,
     });
 
     if (state.snapshots.length > 8) {
@@ -519,9 +532,10 @@ export class BabylonScene {
       avatar.verticalVelocity - PLAYER_GRAVITY * deltaSeconds,
       -PLAYER_MAX_FALL_SPEED,
     );
-    const wantsJump = avatar.verticalVelocity === 0 && this.inputState.jumpQueued;
+    const wantsJump = avatar.isGrounded && this.inputState.jumpQueued;
     if (wantsJump) {
       avatar.verticalVelocity = PLAYER_JUMP_SPEED;
+      avatar.isGrounded = false;
       state.jumping = true;
       this.inputState.jumpQueued = false;
     }
@@ -543,7 +557,11 @@ export class BabylonScene {
     const deltaY = collisionProxy.position.y - previousY;
     if (deltaY >= -0.001 && avatar.verticalVelocity < 0) {
       avatar.verticalVelocity = 0;
+      avatar.isGrounded = true;
       state.jumping = false;
+      state.jumpRequested = false;
+    } else if (Math.abs(deltaY) > 0.001 || Math.abs(avatar.verticalVelocity) > 0.001) {
+      avatar.isGrounded = false;
     }
 
     if (deltaSeconds > 0) {
@@ -1319,6 +1337,8 @@ export class BabylonScene {
         animationRanges,
         lockedNodes,
         collisionProxy: null,
+        isGrounded: true,
+        jumpImpulsePending: false,
         verticalVelocity: 0,
         labelPlane: this.createPlayerLabelPlane(root),
         labelText: "",
@@ -1355,6 +1375,8 @@ export class BabylonScene {
       animationRanges: [],
       lockedNodes: [],
       collisionProxy: null,
+      isGrounded: true,
+      jumpImpulsePending: false,
       verticalVelocity: 0,
       labelPlane: this.createPlayerLabelPlane(root),
       labelText: "",
@@ -1514,7 +1536,7 @@ export class BabylonScene {
 
     const latest = state.snapshots[state.snapshots.length - 1];
     const movementMode = state.movementMode ?? latest?.movementMode ?? "idle";
-    const jumping = Boolean(state.jumping ?? latest?.jumping);
+    const jumping = Boolean(state.jumping || latest?.jumping);
     let activeGroup = avatar.animationGroups.idle ?? avatar.animationGroups.all[0];
 
     if (jumping && avatar.animationGroups.jump) {
@@ -1719,6 +1741,23 @@ export class BabylonScene {
     });
   }
 
+  triggerLocalJump() {
+    if (!this.selfSessionId) {
+      return false;
+    }
+
+    const avatar = this.playerMeshes.get(this.selfSessionId);
+    const state = this.playerStates.get(this.selfSessionId);
+    if (!avatar || !state || !avatar.isGrounded || state.jumping) {
+      return false;
+    }
+
+    state.jumpRequested = false;
+    state.jumping = true;
+    this.inputState.jumpQueued = true;
+    return true;
+  }
+
   attachInputListeners() {
     if (this.boundKeyDown || this.boundKeyUp) {
       return;
@@ -1735,7 +1774,9 @@ export class BabylonScene {
       } else if (key === "x") {
         this.inputState.run = true;
       } else if (key === "c") {
-        this.inputState.jumpQueued = true;
+        if (!this.triggerLocalJump()) {
+          return;
+        }
       } else {
         return;
       }
