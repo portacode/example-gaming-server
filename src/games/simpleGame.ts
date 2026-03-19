@@ -173,12 +173,10 @@ function createSpawnPosition(index: number) {
 
 function canSeePlayer(viewer: SimplePlayer, target: SimplePlayer) {
   const dx = viewer.position.x - target.position.x;
-  const dy = viewer.position.y - target.position.y;
   const dz = viewer.position.z - target.position.z;
   const distanceSquared = dx * dx + dz * dz;
 
-  return distanceSquared <= VISIBILITY_RADIUS * VISIBILITY_RADIUS
-    && Math.abs(dy) <= MAX_VISIBLE_VERTICAL_DELTA;
+  return distanceSquared <= VISIBILITY_RADIUS * VISIBILITY_RADIUS;
 }
 
 function normalizeAngle(angle: number) {
@@ -202,7 +200,6 @@ function clampSpeed(x: number, z: number, maxSpeed: number) {
 const MAX_SPEED = 18;
 const WALK_SPEED = 2.4;
 const VISIBILITY_RADIUS = 100;
-const MAX_VISIBLE_VERTICAL_DELTA = 3.5;
 const MAX_POSITION_TOLERANCE = 0.9;
 const MAX_VERTICAL_SPEED = 10;
 const MAX_VERTICAL_POSITION_TOLERANCE = 0.75;
