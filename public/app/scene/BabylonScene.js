@@ -52,6 +52,7 @@ const PLAYER_COLLIDER_HEIGHT = 1.8;
 const PLAYER_GRAVITY = 28;
 const PLAYER_JUMP_SPEED = 10;
 const PLAYER_MAX_FALL_SPEED = 24;
+const JUMP_REARM_COOLDOWN_MS = 2000;
 const CHARACTER_MODEL_URL = "/assets/characters/Character.glb";
 const WORLD_MODEL_URL = "/assets/world/low-poly_industrial_building.glb";
 const GROUND_DIFFUSE_URL = "/assets/world/textures/asphalt_01_diff_1k.jpg";
@@ -360,10 +361,13 @@ export class BabylonScene {
 
     const isSelf = sessionId === this.selfSessionId;
     const serverJumping = Boolean(player.jumping);
+    const avatar = isSelf ? this.playerMeshes.get(sessionId) : null;
     state.heading = player.heading;
     state.movementMode = player.movementMode ?? "idle";
     if (isSelf) {
-      if (!(state.jumping && !serverJumping)) {
+      if (avatar?.isGrounded) {
+        state.jumping = false;
+      } else if (!(state.jumping && !serverJumping)) {
         state.jumping = serverJumping;
       }
       state.jumpRequested = false;
@@ -430,7 +434,7 @@ export class BabylonScene {
         state.renderedPosition.z,
       );
       this.updateAvatarOrientation(avatar, state, deltaSeconds, isSelf);
-      this.updateAvatarAnimation(avatar, state);
+      this.updateAvatarAnimation(avatar, state, isSelf);
 
       if (isSelf) {
         this.selfPosition = cloneVector(state.renderedPosition);
@@ -1340,6 +1344,7 @@ export class BabylonScene {
         isGrounded: true,
         jumpImpulsePending: false,
         verticalVelocity: 0,
+        lastJumpStartedAt: -JUMP_REARM_COOLDOWN_MS,
         labelPlane: this.createPlayerLabelPlane(root),
         labelText: "",
       };
@@ -1378,6 +1383,7 @@ export class BabylonScene {
       isGrounded: true,
       jumpImpulsePending: false,
       verticalVelocity: 0,
+      lastJumpStartedAt: -JUMP_REARM_COOLDOWN_MS,
       labelPlane: this.createPlayerLabelPlane(root),
       labelText: "",
     };
@@ -1529,14 +1535,14 @@ export class BabylonScene {
     return { from, to };
   }
 
-  updateAvatarAnimation(avatar, state) {
+  updateAvatarAnimation(avatar, state, isSelf = false) {
     if (!avatar.animationGroups?.all?.length) {
       return;
     }
 
     const latest = state.snapshots[state.snapshots.length - 1];
     const movementMode = state.movementMode ?? latest?.movementMode ?? "idle";
-    const jumping = Boolean(state.jumping || latest?.jumping);
+    const jumping = isSelf ? Boolean(state.jumping) : Boolean(state.jumping || latest?.jumping);
     let activeGroup = avatar.animationGroups.idle ?? avatar.animationGroups.all[0];
 
     if (jumping && avatar.animationGroups.jump) {
@@ -1746,12 +1752,18 @@ export class BabylonScene {
       return false;
     }
 
+    const now = performance.now();
     const avatar = this.playerMeshes.get(this.selfSessionId);
     const state = this.playerStates.get(this.selfSessionId);
     if (!avatar || !state || !avatar.isGrounded || state.jumping) {
       return false;
     }
 
+    if (now - (avatar.lastJumpStartedAt ?? -JUMP_REARM_COOLDOWN_MS) < JUMP_REARM_COOLDOWN_MS) {
+      return false;
+    }
+
+    avatar.lastJumpStartedAt = now;
     state.jumpRequested = false;
     state.jumping = true;
     this.inputState.jumpQueued = true;
