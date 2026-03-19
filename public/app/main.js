@@ -265,7 +265,11 @@ try {
   throw error;
 }
 
-setConnectionState({ state: "disconnected" });
+const resumedSession = await network.reconnectFromStoredSession();
+if (!resumedSession) {
+  setConnectionState({ state: "disconnected" });
+}
+
 setDebugOpen(false);
 syncColliderButton();
 logWorldImportStats();

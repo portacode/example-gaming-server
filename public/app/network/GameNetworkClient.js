@@ -8,6 +8,7 @@ export class GameNetworkClient {
     this.room = null;
     this.reconnectAttempts = 0;
     this.manualLeave = false;
+    this.reconnectTokenStorageKey = "game:reconnectionToken";
   }
 
   async connect(username) {
@@ -21,6 +22,40 @@ export class GameNetworkClient {
     this.bindRoom(room);
   }
 
+  async reconnectFromStoredSession() {
+    const token = this.readStoredReconnectToken();
+    if (!token) {
+      return false;
+    }
+
+    const endpoint = this.buildEndpoint();
+    this.manualLeave = false;
+    this.onConnectionChange({ state: "reconnecting", attempt: 1, maxAttempts: 3 });
+    this.onLog(`Attempting reload reconnect to ${endpoint}...`);
+    this.client = this.client || new Colyseus.Client(endpoint);
+    this.reconnectAttempts = 1;
+
+    try {
+      const room = await this.client.reconnect(token);
+      this.onLog(`Recovered session in room ${room.roomId}`);
+      this.bindRoom(room);
+      return true;
+    } catch (error) {
+      this.onLog(`Stored reconnect failed: ${error}`);
+      const message = String(error);
+      const terminal = /invalid or expired/i.test(message);
+
+      if (terminal) {
+        this.clearStoredReconnectToken();
+        this.onConnectionChange({ state: "disconnected", reason: "token_expired" });
+        return false;
+      }
+
+      this.scheduleReconnect(token);
+      return true;
+    }
+  }
+
   sendAction(action) {
     if (!this.room) {
       return;
@@ -30,6 +65,8 @@ export class GameNetworkClient {
   }
 
   leave() {
+    this.clearStoredReconnectToken();
+
     if (!this.room) {
       return;
     }
@@ -49,6 +86,7 @@ export class GameNetworkClient {
     this.room = nextRoom;
     this.manualLeave = false;
     this.reconnectAttempts = 0;
+    this.storeReconnectToken(nextRoom.reconnectionToken);
     this.onConnectionChange({ state: "connected", roomId: nextRoom.roomId });
 
     nextRoom.onStateChange((state) => {
@@ -73,6 +111,9 @@ export class GameNetworkClient {
       }
 
       if (!shouldReconnect || !token || this.reconnectAttempts >= 3) {
+        if (this.manualLeave || code === 4001 || !token) {
+          this.clearStoredReconnectToken();
+        }
         this.onConnectionChange({
           state: "disconnected",
           reason: this.manualLeave ? "left" : code === 4001 ? "rejected" : "closed",
@@ -105,6 +146,9 @@ export class GameNetworkClient {
         const terminal = /invalid or expired/i.test(message);
 
         if (terminal || this.reconnectAttempts >= 3) {
+          if (terminal) {
+            this.clearStoredReconnectToken();
+          }
           this.onConnectionChange({
             state: "disconnected",
             reason: terminal ? "token_expired" : "reconnect_failed",
@@ -116,5 +160,33 @@ export class GameNetworkClient {
         this.scheduleReconnect(token);
       }
     }, this.reconnectAttempts * 1000);
+  }
+
+  storeReconnectToken(token) {
+    if (!token) {
+      return;
+    }
+
+    try {
+      window.sessionStorage.setItem(this.reconnectTokenStorageKey, token);
+    } catch {
+      this.onLog("Unable to persist reconnect token in session storage.");
+    }
+  }
+
+  readStoredReconnectToken() {
+    try {
+      return window.sessionStorage.getItem(this.reconnectTokenStorageKey);
+    } catch {
+      return null;
+    }
+  }
+
+  clearStoredReconnectToken() {
+    try {
+      window.sessionStorage.removeItem(this.reconnectTokenStorageKey);
+    } catch {
+      // Ignore storage cleanup failures.
+    }
   }
 }
