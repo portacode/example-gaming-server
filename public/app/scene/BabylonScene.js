@@ -1769,7 +1769,9 @@ export class BabylonScene {
     avatar.collisionProxy?.dispose(false, true);
     avatar.labelPlane?.material?.dispose(false, true);
     avatar.labelPlane?.dispose(false, true);
-    avatar.root.dispose(false, true);
+    // Avatar instances share GLB-backed textures, so disposing descendants'
+    // materials/textures here can break other players still using them.
+    avatar.root.dispose(false, false);
   }
 
   syncMovementIntent() {
