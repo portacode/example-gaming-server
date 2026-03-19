@@ -8,12 +8,16 @@ export interface SimpleJoinOptions {
   username?: string;
 }
 
+export type MovementMode = "idle" | "walk" | "run";
+
 export interface SimplePlayer {
   sessionId: string;
   playerNumber: number;
   username: string;
   connected: boolean;
   heading: number;
+  movementMode: MovementMode;
+  jumping: boolean;
   lastAcceptedMoveAt: number;
   velocity: {
     x: number;
@@ -47,6 +51,8 @@ export interface SimpleGameView {
     username: string;
     connected: boolean;
     heading: number;
+    movementMode: MovementMode;
+    jumping: boolean;
     velocity: {
       x: number;
       z: number;
@@ -63,6 +69,8 @@ export interface SimpleGameView {
     username: string;
     connected: boolean;
     heading: number;
+    movementMode: MovementMode;
+    jumping: boolean;
     velocity: {
       x: number;
       z: number;
@@ -91,6 +99,8 @@ export interface SteerAction {
 export interface MoveAction {
   type: "move";
   heading: number;
+  movementMode: MovementMode;
+  jumping: boolean;
   velocity: {
     x: number;
     z: number;
@@ -189,13 +199,22 @@ function clampSpeed(x: number, z: number, maxSpeed: number) {
   };
 }
 
-const MAX_SPEED = 7.5;
+const MAX_SPEED = 18;
+const WALK_SPEED = 2.4;
 const VISIBILITY_RADIUS = 100;
 const MAX_VISIBLE_VERTICAL_DELTA = 3.5;
 const MAX_POSITION_TOLERANCE = 0.9;
 const MAX_VERTICAL_SPEED = 10;
 const MAX_VERTICAL_POSITION_TOLERANCE = 0.75;
 const MIN_MOVE_DT_MS = 16;
+
+function sanitizeMovementMode(value: string | undefined): MovementMode {
+  return value === "walk" || value === "run" ? value : "idle";
+}
+
+function getMaxSpeedForMode(mode: MovementMode) {
+  return mode === "run" ? MAX_SPEED : mode === "walk" ? WALK_SPEED : 0;
+}
 
 function syncPlayerPresenceMap(roomPlayers: MapSchema<PlayerPresenceState>, state: SimpleGameState) {
   const playerIds = new Set(Object.keys(state.players));
@@ -259,6 +278,8 @@ export const simpleGameDefinition: GameDefinition<
       username,
       connected: true,
       heading: 0,
+      movementMode: "idle",
+      jumping: false,
       lastAcceptedMoveAt: Date.now(),
       velocity: {
         x: 0,
@@ -286,6 +307,8 @@ export const simpleGameDefinition: GameDefinition<
     if (player) {
       player.connected = false;
       player.lastAcceptedMoveAt = Date.now();
+      player.movementMode = "idle";
+      player.jumping = false;
       player.velocity.x = 0;
       player.velocity.z = 0;
     }
@@ -314,13 +337,15 @@ export const simpleGameDefinition: GameDefinition<
         const now = Date.now();
         const dtMs = Math.max(now - player.lastAcceptedMoveAt, MIN_MOVE_DT_MS);
         const dtSeconds = dtMs / 1000;
-        const reportedVelocity = clampSpeed(action.velocity.x, action.velocity.z, MAX_SPEED);
+        const movementMode = sanitizeMovementMode(action.movementMode);
+        const maxSpeed = getMaxSpeedForMode(movementMode);
+        const reportedVelocity = clampSpeed(action.velocity.x, action.velocity.z, maxSpeed);
         const nextY = sanitizeVerticalPosition(action.position.y, player.position.y);
         const dx = action.position.x - player.position.x;
         const dy = nextY - player.position.y;
         const dz = action.position.z - player.position.z;
         const distance = Math.hypot(dx, dz);
-        const maxDistance = MAX_SPEED * dtSeconds + MAX_POSITION_TOLERANCE;
+        const maxDistance = maxSpeed * dtSeconds + MAX_POSITION_TOLERANCE;
         const maxVerticalDistance = MAX_VERTICAL_SPEED * dtSeconds + MAX_VERTICAL_POSITION_TOLERANCE;
 
         if (distance > maxDistance) {
@@ -332,6 +357,8 @@ export const simpleGameDefinition: GameDefinition<
         }
 
         player.heading = normalizeAngle(action.heading);
+        player.movementMode = movementMode;
+        player.jumping = Boolean(action.jumping);
         player.velocity.x = reportedVelocity.x;
         player.velocity.z = reportedVelocity.z;
         player.position.x = sanitizeHorizontalPosition(action.position.x, player.position.x);
@@ -361,6 +388,8 @@ export const simpleGameDefinition: GameDefinition<
             username: player.username,
             connected: player.connected,
             heading: player.heading,
+            movementMode: player.movementMode,
+            jumping: player.jumping,
             velocity: {
               x: player.velocity.x,
               z: player.velocity.z,
@@ -386,6 +415,8 @@ export const simpleGameDefinition: GameDefinition<
             username: self.username,
             connected: self.connected,
             heading: self.heading,
+            movementMode: self.movementMode,
+            jumping: self.jumping,
             velocity: {
               x: self.velocity.x,
               z: self.velocity.z,

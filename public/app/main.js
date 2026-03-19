@@ -166,10 +166,12 @@ function setBootLoadingState() {
 
 const sceneApp = new BabylonScene({
   canvas,
-  onMovementChange: ({ heading, velocity, position }) => {
+  onMovementChange: ({ heading, movementMode, jumping, velocity, position }) => {
     network.sendAction({
       type: "move",
       heading,
+      movementMode,
+      jumping,
       velocity,
       position,
     });

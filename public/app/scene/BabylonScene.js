@@ -35,9 +35,11 @@ const OFFSET_SMOOTHING = 0.12;
 const INTERVAL_SMOOTHING = 0.2;
 const JITTER_SMOOTHING = 0.15;
 const MOVEMENT_SEND_INTERVAL_MS = 50;
-const MOVEMENT_FORCE = 18;
+const WALK_MOVEMENT_FORCE = 9;
+const RUN_MOVEMENT_FORCE = 44;
 const MOVEMENT_DRAG = 4.5;
-const MAX_SPEED = 7.5;
+const WALK_SPEED = 2.4;
+const RUN_SPEED = 18;
 const PLAYER_VISUAL_Y_OFFSET = 1;
 const TARGET_AVATAR_HEIGHT = 2.2;
 const PLAYER_LABEL_Y_OFFSET = 3.2;
@@ -48,6 +50,7 @@ const PLAYER_LABEL_TEXTURE_HEIGHT = 128;
 const PLAYER_COLLIDER_RADIUS = 0.35;
 const PLAYER_COLLIDER_HEIGHT = 1.8;
 const PLAYER_GRAVITY = 28;
+const PLAYER_JUMP_SPEED = 10;
 const PLAYER_MAX_FALL_SPEED = 24;
 const CHARACTER_MODEL_URL = "/assets/characters/Character.glb";
 const WORLD_MODEL_URL = "/assets/world/low-poly_industrial_building.glb";
@@ -55,6 +58,7 @@ const GROUND_DIFFUSE_URL = "/assets/world/textures/asphalt_01_diff_1k.jpg";
 const ROTATION_SMOOTHING = 12;
 const REMOTE_ROTATION_SPEED_THRESHOLD = 0.6;
 const WALK_ANIMATION_SPEED_THRESHOLD = 0.15;
+const RUN_ANIMATION_SPEED_THRESHOLD = 5;
 const GROUND_SIZE = 2400;
 const GROUND_TEXTURE_REPEAT = 180;
 const DEFAULT_UNKNOWN_ASSET_WEIGHT = 1024 * 1024;
@@ -103,6 +107,26 @@ function clampSpeed(x, z, maxSpeed) {
   };
 }
 
+function getMovementMode(inputState) {
+  if (inputState.run) {
+    return "run";
+  }
+
+  if (inputState.walk) {
+    return "walk";
+  }
+
+  return "idle";
+}
+
+function getSpeedForMode(mode) {
+  return mode === "run" ? RUN_SPEED : mode === "walk" ? WALK_SPEED : 0;
+}
+
+function getForceForMode(mode) {
+  return mode === "run" ? RUN_MOVEMENT_FORCE : mode === "walk" ? WALK_MOVEMENT_FORCE : 0;
+}
+
 function extrapolateLinear(snapshot, deltaMs) {
   const deltaSeconds = deltaMs / 1000;
   return {
@@ -125,7 +149,7 @@ function integrateMovement(snapshot, heading, deltaMs) {
   velocity.x *= dragFactor;
   velocity.z *= dragFactor;
 
-  const clampedVelocity = clampSpeed(velocity.x, velocity.z, MAX_SPEED);
+  const clampedVelocity = clampSpeed(velocity.x, velocity.z, RUN_SPEED);
   velocity.x = clampedVelocity.x;
   velocity.z = clampedVelocity.z;
 
@@ -159,6 +183,8 @@ export class BabylonScene {
     this.lastMovementSentAt = 0;
     this.lastSentPosition = null;
     this.lastSentVelocity = null;
+    this.lastSentMovementMode = "idle";
+    this.lastSentJumping = false;
     this.skyDome = null;
     this.cameraFocus = null;
     this.cameraFocusPosition = null;
@@ -198,6 +224,13 @@ export class BabylonScene {
     this.assetUrls = new Map();
     this.objectUrls = [];
     this.lastActiveLoadLabel = "Starting downloads...";
+    this.inputState = {
+      walk: false,
+      run: false,
+      jumpQueued: false,
+    };
+    this.boundKeyDown = null;
+    this.boundKeyUp = null;
   }
 
   async init() {
@@ -220,6 +253,7 @@ export class BabylonScene {
     window.addEventListener("resize", () => {
       this.engine.resize();
     });
+    this.attachInputListeners();
   }
 
   applyView(view) {
@@ -258,6 +292,8 @@ export class BabylonScene {
       this.lastHeading = null;
       this.lastSentPosition = null;
       this.lastSentVelocity = null;
+      this.lastSentMovementMode = "idle";
+      this.lastSentJumping = false;
       this.cameraFocusPosition = null;
     }
   }
@@ -312,16 +348,22 @@ export class BabylonScene {
         renderedPosition: cloneVector(player.position),
         heading: player.heading,
         localVelocity: cloneVelocity(player.velocity),
+        movementMode: player.movementMode ?? "idle",
+        jumping: Boolean(player.jumping),
       };
       this.playerStates.set(sessionId, state);
     }
 
     state.heading = player.heading;
+    state.movementMode = player.movementMode ?? "idle";
+    state.jumping = Boolean(player.jumping);
     state.snapshots.push({
       serverTime,
       heading: player.heading,
       velocity: cloneVelocity(player.velocity),
       position: cloneVector(player.position),
+      movementMode: player.movementMode ?? "idle",
+      jumping: Boolean(player.jumping),
     });
 
     if (state.snapshots.length > 8) {
@@ -412,24 +454,30 @@ export class BabylonScene {
   integrateSelfCollisionTarget(state, deltaSeconds) {
     const currentPosition = state.renderedPosition ?? { x: 0, y: 1, z: 0 };
     const velocity = state.localVelocity ?? { x: 0, z: 0 };
+    const movementMode = getMovementMode(this.inputState);
+    const movementForce = getForceForMode(movementMode);
+    const targetSpeed = getSpeedForMode(movementMode);
     if (this.lastHeading === null && this.camera) {
       this.lastHeading = getHeadingFromCamera(currentPosition, this.camera.position);
     }
     const heading = this.lastHeading ?? state.heading ?? 0;
-    const forceX = Math.cos(heading) * MOVEMENT_FORCE;
-    const forceZ = Math.sin(heading) * MOVEMENT_FORCE;
+    if (targetSpeed > 0 && movementForce > 0) {
+      const forceX = Math.cos(heading) * movementForce;
+      const forceZ = Math.sin(heading) * movementForce;
 
-    velocity.x += forceX * deltaSeconds;
-    velocity.z += forceZ * deltaSeconds;
+      velocity.x += forceX * deltaSeconds;
+      velocity.z += forceZ * deltaSeconds;
+    }
 
     const dragFactor = Math.max(0, 1 - MOVEMENT_DRAG * deltaSeconds);
     velocity.x *= dragFactor;
     velocity.z *= dragFactor;
 
-    const clampedVelocity = clampSpeed(velocity.x, velocity.z, MAX_SPEED);
+    const clampedVelocity = clampSpeed(velocity.x, velocity.z, targetSpeed);
     velocity.x = clampedVelocity.x;
     velocity.z = clampedVelocity.z;
     state.localVelocity = velocity;
+    state.movementMode = movementMode;
 
     return {
       x: currentPosition.x + velocity.x * deltaSeconds,
@@ -471,6 +519,12 @@ export class BabylonScene {
       avatar.verticalVelocity - PLAYER_GRAVITY * deltaSeconds,
       -PLAYER_MAX_FALL_SPEED,
     );
+    const wantsJump = avatar.verticalVelocity === 0 && this.inputState.jumpQueued;
+    if (wantsJump) {
+      avatar.verticalVelocity = PLAYER_JUMP_SPEED;
+      state.jumping = true;
+      this.inputState.jumpQueued = false;
+    }
 
     const previousX = collisionProxy.position.x;
     const previousY = collisionProxy.position.y;
@@ -489,6 +543,7 @@ export class BabylonScene {
     const deltaY = collisionProxy.position.y - previousY;
     if (deltaY >= -0.001 && avatar.verticalVelocity < 0) {
       avatar.verticalVelocity = 0;
+      state.jumping = false;
     }
 
     if (deltaSeconds > 0) {
@@ -1294,6 +1349,8 @@ export class BabylonScene {
         all: [],
         idle: null,
         walk: null,
+        run: null,
+        jump: null,
       },
       animationRanges: [],
       lockedNodes: [],
@@ -1398,6 +1455,8 @@ export class BabylonScene {
       all: availableGroups,
       idle: findGroup(/\bidle\b/i) ?? availableGroups[0] ?? null,
       walk: findGroup(/\bwalk(?:ing)?\b/i) ?? findGroup(/\bwaking\b/i) ?? availableGroups[0] ?? null,
+      run: findGroup(/\brun(?:ning)?\b/i) ?? null,
+      jump: findGroup(/\bjump(?:ing)?\b/i) ?? null,
     };
   }
 
@@ -1456,9 +1515,21 @@ export class BabylonScene {
     const latest = state.snapshots[state.snapshots.length - 1];
     const velocity = state.localVelocity ?? latest?.velocity ?? { x: 0, z: 0 };
     const speed = Math.hypot(velocity.x, velocity.z);
-    const activeGroup = speed > WALK_ANIMATION_SPEED_THRESHOLD
-      ? (avatar.animationGroups.walk ?? avatar.animationGroups.idle ?? avatar.animationGroups.all[0])
-      : (avatar.animationGroups.idle ?? avatar.animationGroups.walk ?? avatar.animationGroups.all[0]);
+    const movementMode = state.movementMode ?? latest?.movementMode ?? "idle";
+    const jumping = Boolean(state.jumping ?? latest?.jumping);
+    let activeGroup = avatar.animationGroups.idle ?? avatar.animationGroups.all[0];
+
+    if (jumping && avatar.animationGroups.jump) {
+      activeGroup = avatar.animationGroups.jump;
+    } else if (movementMode === "run" && speed > WALK_ANIMATION_SPEED_THRESHOLD) {
+      activeGroup = avatar.animationGroups.run ?? avatar.animationGroups.walk ?? activeGroup;
+    } else if (movementMode === "walk" && speed > WALK_ANIMATION_SPEED_THRESHOLD) {
+      activeGroup = avatar.animationGroups.walk ?? activeGroup;
+    } else if (speed > RUN_ANIMATION_SPEED_THRESHOLD) {
+      activeGroup = avatar.animationGroups.run ?? avatar.animationGroups.walk ?? activeGroup;
+    } else if (speed > WALK_ANIMATION_SPEED_THRESHOLD) {
+      activeGroup = avatar.animationGroups.walk ?? activeGroup;
+    }
 
     avatar.animationGroups.all.forEach((group, index) => {
       const range = avatar.animationRanges[index] ?? { from: group.from, to: group.to };
@@ -1613,6 +1684,8 @@ export class BabylonScene {
     const now = performance.now();
     const state = this.selfSessionId ? this.playerStates.get(this.selfSessionId) : null;
     const velocity = state?.localVelocity ?? state?.snapshots?.[state.snapshots.length - 1]?.velocity ?? { x: 0, z: 0 };
+    const movementMode = getMovementMode(this.inputState);
+    const jumping = Boolean(state?.jumping);
 
     if (this.lastHeading !== null) {
       const delta = Math.atan2(Math.sin(heading - this.lastHeading), Math.cos(heading - this.lastHeading));
@@ -1627,6 +1700,8 @@ export class BabylonScene {
       if (Math.abs(delta) < 0.04
         && speedDelta < 0.08
         && positionDelta < 0.08
+        && movementMode === (this.lastSentMovementMode ?? "idle")
+        && jumping === Boolean(this.lastSentJumping)
         && now - this.lastMovementSentAt < MOVEMENT_SEND_INTERVAL_MS) {
         return;
       }
@@ -1636,13 +1711,58 @@ export class BabylonScene {
     this.lastMovementSentAt = now;
     this.lastSentVelocity = { x: velocity.x, z: velocity.z };
     this.lastSentPosition = cloneVector(this.selfPosition);
+    this.lastSentMovementMode = movementMode;
+    this.lastSentJumping = jumping;
     this.onMovementChange?.({
       heading,
+      movementMode,
+      jumping,
       velocity: {
         x: velocity.x,
         z: velocity.z,
       },
       position: cloneVector(this.selfPosition),
     });
+  }
+
+  attachInputListeners() {
+    if (this.boundKeyDown || this.boundKeyUp) {
+      return;
+    }
+
+    this.boundKeyDown = (event) => {
+      if (event.repeat) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === "z") {
+        this.inputState.walk = true;
+      } else if (key === "x") {
+        this.inputState.run = true;
+      } else if (key === "c") {
+        this.inputState.jumpQueued = true;
+      } else {
+        return;
+      }
+
+      event.preventDefault();
+    };
+
+    this.boundKeyUp = (event) => {
+      const key = event.key.toLowerCase();
+      if (key === "z") {
+        this.inputState.walk = false;
+      } else if (key === "x") {
+        this.inputState.run = false;
+      } else {
+        return;
+      }
+
+      event.preventDefault();
+    };
+
+    window.addEventListener("keydown", this.boundKeyDown);
+    window.addEventListener("keyup", this.boundKeyUp);
   }
 }
