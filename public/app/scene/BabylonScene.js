@@ -204,6 +204,7 @@ export class BabylonScene {
     this.onLoadProgress = onLoadProgress;
     this.engine = null;
     this.scene = null;
+    this.physicsPlugin = null;
     this.camera = null;
     this.playerMeshes = new Map();
     this.playerStates = new Map();
@@ -750,6 +751,7 @@ export class BabylonScene {
     const havok = await HavokPhysics();
     const plugin = new BABYLON.HavokPlugin(true, havok);
     this.scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), plugin);
+    this.physicsPlugin = plugin;
   }
 
   async createEnvironment() {
@@ -1269,14 +1271,15 @@ export class BabylonScene {
   buildAutoWorldColliders(root) {
     this.disposeWorldColliders();
     this.refreshWorldMeshBounds(root);
+    const colliderSourceMeshes = this.getWorldColliderSourceMeshes();
     this.worldColliderStats = {
-      attempted: this.worldMeshes.length,
+      attempted: colliderSourceMeshes.length,
       created: 0,
       failed: 0,
       failedMeshes: [],
     };
 
-    this.worldMeshes.forEach((mesh, index) => {
+    colliderSourceMeshes.forEach((mesh, index) => {
       const collider = this.createWorldMeshCollider(mesh, index);
       if (collider) {
         this.worldColliders.push(collider);
@@ -1286,6 +1289,22 @@ export class BabylonScene {
         this.worldColliderStats.failedMeshes.push(mesh.name || `mesh-${mesh.uniqueId}`);
       }
     });
+  }
+
+  getWorldColliderSourceMeshes() {
+    const seen = new Set();
+    const meshes = [];
+
+    this.worldSurfaceMeshes.forEach((mesh) => {
+      if (!mesh || seen.has(mesh.uniqueId)) {
+        return;
+      }
+
+      seen.add(mesh.uniqueId);
+      meshes.push(mesh);
+    });
+
+    return meshes;
   }
 
   disposeWorldColliders() {
@@ -1326,8 +1345,29 @@ export class BabylonScene {
     mesh.outlineColor = new BABYLON.Color3(1, 0.52, 0.12);
     mesh.outlineWidth = 0.08;
 
+    let aggregate = null;
+    try {
+      if (!this.physicsPlugin || typeof BABYLON.PhysicsAggregate !== "function" || !BABYLON.PhysicsShapeType) {
+        throw new Error("Babylon physics runtime is not available.");
+      }
+
+      aggregate = new BABYLON.PhysicsAggregate(
+        mesh,
+        BABYLON.PhysicsShapeType.MESH,
+        {
+          mass: 0,
+          restitution: 0,
+          friction: 0.9,
+        },
+        this.scene,
+      );
+    } catch (error) {
+      console.warn(`Failed to create Havok collider for ${mesh.name || `mesh-${mesh.uniqueId}`}`, error);
+      return null;
+    }
+
     return {
-      aggregate: null,
+      aggregate,
       sourceMesh: mesh,
       sourceName: mesh.name || `mesh-${mesh.uniqueId}`,
     };
