@@ -48,11 +48,16 @@ const TOUCH_SPIN_EPSILON = 0.04;
 const TOUCH_HEADING_TURN_SPEED = 5.4;
 const PLAYER_VISUAL_Y_OFFSET = 1;
 const TARGET_AVATAR_HEIGHT = 2.2;
-const PLAYER_LABEL_Y_OFFSET = 3.2;
-const PLAYER_LABEL_WIDTH = 2.6;
-const PLAYER_LABEL_HEIGHT = 0.7;
-const PLAYER_LABEL_TEXTURE_WIDTH = 512;
-const PLAYER_LABEL_TEXTURE_HEIGHT = 128;
+const PLAYER_LABEL_Y_OFFSET = 1.9;
+const PLAYER_LABEL_WIDTH = 5.2;
+const PLAYER_LABEL_TEXTURE_WIDTH = 1024;
+const PLAYER_LABEL_TEXTURE_HEIGHT = 192;
+const PLAYER_LABEL_HEIGHT = PLAYER_LABEL_WIDTH * (PLAYER_LABEL_TEXTURE_HEIGHT / PLAYER_LABEL_TEXTURE_WIDTH);
+const PLAYER_LABEL_FONT = "bold 64px Georgia";
+const PLAYER_LABEL_FONT_SIZE = 64;
+const PLAYER_LABEL_TEXT_PADDING_X = 20;
+const PLAYER_LABEL_TEXT_PADDING_Y = 12;
+const PLAYER_LABEL_MIN_BOX_WIDTH = 80;
 const PLAYER_COLLIDER_RADIUS = 0.35;
 const PLAYER_COLLIDER_HEIGHT = 1.8;
 const PLAYER_GRAVITY = 28;
@@ -1828,17 +1833,32 @@ export class BabylonScene {
 
     const context = texture.getContext();
     context.clearRect(0, 0, PLAYER_LABEL_TEXTURE_WIDTH, PLAYER_LABEL_TEXTURE_HEIGHT);
+    plane.scaling.x = 1;
+    plane.scaling.y = 1;
     if (text) {
+      context.font = PLAYER_LABEL_FONT;
+      const measuredTextWidth = Math.ceil(context.measureText(text).width);
+      const boxWidth = Math.max(
+        PLAYER_LABEL_MIN_BOX_WIDTH,
+        Math.min(
+          PLAYER_LABEL_TEXTURE_WIDTH - 8,
+          measuredTextWidth + (PLAYER_LABEL_TEXT_PADDING_X * 2),
+        ),
+      );
+      const boxHeight = PLAYER_LABEL_FONT_SIZE + (PLAYER_LABEL_TEXT_PADDING_Y * 2);
+      const boxX = Math.round((PLAYER_LABEL_TEXTURE_WIDTH - boxWidth) / 2);
+      const boxY = Math.round((PLAYER_LABEL_TEXTURE_HEIGHT - boxHeight) / 2);
       context.fillStyle = "rgba(21, 24, 28, 0.78)";
-      context.fillRect(8, 12, PLAYER_LABEL_TEXTURE_WIDTH - 16, PLAYER_LABEL_TEXTURE_HEIGHT - 24);
+      context.fillRect(boxX, boxY, boxWidth, boxHeight);
       context.strokeStyle = "rgba(255, 244, 214, 0.9)";
-      context.lineWidth = 4;
-      context.strokeRect(8, 12, PLAYER_LABEL_TEXTURE_WIDTH - 16, PLAYER_LABEL_TEXTURE_HEIGHT - 24);
-      context.font = "bold 34px Georgia";
+      context.lineWidth = 2;
+      context.strokeRect(boxX, boxY, boxWidth, boxHeight);
       context.fillStyle = "#fff7dc";
       context.textAlign = "center";
       context.textBaseline = "middle";
-      context.fillText(text, PLAYER_LABEL_TEXTURE_WIDTH / 2, PLAYER_LABEL_TEXTURE_HEIGHT / 2 + 2);
+      context.fillText(text, PLAYER_LABEL_TEXTURE_WIDTH / 2, PLAYER_LABEL_TEXTURE_HEIGHT / 2 + 1);
+      plane.scaling.x = boxWidth / PLAYER_LABEL_TEXTURE_WIDTH;
+      plane.scaling.y = boxHeight / PLAYER_LABEL_TEXTURE_HEIGHT;
     }
     texture.update();
   }
